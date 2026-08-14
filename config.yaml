@@ -1,0 +1,197 @@
+# ============================================================
+# 每日新闻简报 · 配置文件
+# 修改后保存，下次运行自动生效。所有新闻源可自由增删。
+# ============================================================
+
+report:
+  hours_back: 26          # 只保留最近 26 小时内的新闻（热榜不受此限制）
+  output_dir: "output"    # 报告输出目录（按月归档）
+  logs_dir: "logs"
+  keep_days: 30           # 自动清理 N 天前的旧报告
+  fulltext_cap: 60        # 最多抓取多少条正文全文（越大摘要越详实，耗时略增）
+  post_dedup_threshold: 0.5   # 本地模式/兜底时的摘要相似度去重阈值（AI 模式下用语义去重更准）
+  categories:
+    finance:
+      title: "财经与股市"
+      max_items: 12       # 该分类最多保留条数
+    tech:
+      title: "科技前沿"
+      max_items: 8
+    world:
+      title: "国际大事"
+      max_items: 5
+
+# ---------- AI 设置（DeepSeek）----------
+ai:
+  enabled: true                      # false 则完全走本地处理
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-v4-flash"
+  batch_size: 25                     # 每批提交给 AI 的条数（控制成本与响应速度）
+  concurrency: 4                     # 并发提交的 AI 批次数量（加速，质量不变）
+  timeout: 120
+  max_retries: 3
+  # 计费单价（元/百万 tokens），用于估算本次生成费用，可随官方调价更新
+  pricing:
+    input_per_million: 1.0           # 输入（未命中缓存）价格
+    output_per_million: 2.0          # 输出价格
+
+# ---------- 网络设置 ----------
+network:
+  request_timeout: 15
+  retries: 2
+  # 代理地址（梯子）。国外源（英文源）会自动走此代理，国内源直连。
+  # 留空 = 直连（此时国外源可能无法访问）。
+  proxy: "http://127.0.0.1:7892"
+
+# ---------- 用户画像（AI 据此筛选与加权，可随时调整）----------
+user_profile:
+  background: "光电信息科学与工程专业本科生，正在探索专业方向；同时是刚入门的股民/投资者。"
+  focus_areas:
+    - "半导体/芯片"
+    - "新能源/锂电"
+    - "AI/算力"
+    - "军工/高端制造"
+    - "光电/显示/光学"
+  priorities:
+    - "A股/港股行情"
+    - "美股与全球市场"
+    - "宏观政策与经济数据"
+    - "科技前沿（半导体、AI、光电）"
+    - "国际地缘大事"
+  # 本地过滤也会使用这些词（AI 二次剔除更全面）
+  exclude_keywords:
+    - "八卦"
+    - "绯闻"
+    - "恋情"
+    - "出轨"
+    - "塌房"
+    - "灵异"
+    - "奇闻"
+    - "猎奇"
+    - "秒杀"
+    - "促销"
+    - "优惠券"
+    - "抽奖"
+    - "爆款"
+    - "种草"
+    - "安利"
+    - "明星同款"
+  summary_style: "客观简报"
+  summary_length: 200        # 今日要闻综述的目标字数
+  item_summary_chars: 200    # 每条新闻 AI 中文摘要的目标字数（越大越详实，耗时/成本略增）
+  language_level: "通俗易懂，面向非专业人士"
+
+# ---------- 新闻源 ----------
+# type:
+#   rss  - RSS/Atom 订阅
+#   json - JSON 接口（热榜）
+# language: zh=中文, en=英文（英文新闻由 AI 翻译成中文摘要，双语显示）
+# full_text: true=重点源，抓取正文全文供 AI 做更准确的摘要
+sources:
+  # ===== 财经与股市（finance）=====
+  - name: "MarketWatch"
+    category: finance
+    type: rss
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    language: en
+    full_text: false
+  - name: "CNBC Top News"
+    category: finance
+    type: rss
+    url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    language: en
+    full_text: false
+
+  # ===== 科技前沿（tech）=====
+  - name: "少数派"
+    category: tech
+    type: rss
+    url: "https://sspai.com/feed"
+    language: zh
+    full_text: true
+  - name: "钛媒体"
+    category: tech
+    type: rss
+    url: "https://www.tmtpost.com/rss"
+    language: zh
+    full_text: false
+  - name: "极客公园"
+    category: tech
+    type: rss
+    url: "https://www.geekpark.net/rss"
+    language: zh
+    full_text: true
+  - name: "爱范儿"
+    category: tech
+    type: rss
+    url: "https://www.ifanr.com/feed"
+    language: zh
+    full_text: false
+  - name: "Hacker News"
+    category: tech
+    type: rss
+    url: "https://news.ycombinator.com/rss"
+    language: en
+    full_text: false
+  - name: "The Verge"
+    category: tech
+    type: rss
+    url: "https://www.theverge.com/rss/index.xml"
+    language: en
+    full_text: true
+  - name: "TechCrunch"
+    category: tech
+    type: rss
+    url: "https://techcrunch.com/feed/"
+    language: en
+    full_text: true
+  - name: "Ars Technica"
+    category: tech
+    type: rss
+    url: "https://feeds.arstechnica.com/arstechnica/index"
+    language: en
+    full_text: true
+  - name: "MIT Technology Review"
+    category: tech
+    type: rss
+    url: "https://www.technologyreview.com/feed/"
+    language: en
+    full_text: true
+  - name: "Wired"
+    category: tech
+    type: rss
+    url: "https://www.wired.com/feed/rss"
+    language: en
+    full_text: true
+
+  # ===== 国际大事（world）=====
+  - name: "NPR World"
+    category: world
+    type: rss
+    url: "https://feeds.npr.org/1004/rss.xml"
+    language: en
+    full_text: true
+  - name: "DW 德国之声"
+    category: world
+    type: rss
+    url: "https://rss.dw.com/rdf/rss-en-all"
+    language: en
+    full_text: false
+  - name: "The Guardian World"
+    category: world
+    type: rss
+    url: "https://www.theguardian.com/world/rss"
+    language: en
+    full_text: true
+  - name: "Al Jazeera"
+    category: world
+    type: rss
+    url: "https://www.aljazeera.com/xml/rss/all.xml"
+    language: en
+    full_text: false
+  - name: "NHK World"
+    category: world
+    type: rss
+    url: "https://www3.nhk.or.jp/rss/news/cat0.xml"
+    language: en
+    full_text: false

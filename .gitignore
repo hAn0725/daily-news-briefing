@@ -1,0 +1,19 @@
+# 密钥（绝不提交！.env 内含加密后的 API Key）
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 生成产物
+output/
+logs/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+*.swp
