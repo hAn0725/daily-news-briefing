@@ -19,6 +19,10 @@ class Config:
         cfg_path = Path(path) if path else BASE_DIR / "config.yaml"
         with open(cfg_path, encoding="utf-8") as f:
             self.data = yaml.safe_load(f) or {}
+        self.report = self.data.get("report", {}) or {}
+        self.network = self.data.get("network", {}) or {}
+        self.ai_cfg = self.data.get("ai", {}) or {}
+        self.profile = self.data.get("user_profile", {}) or {}
         self.api_key = self._load_api_key()
 
     def _load_api_key(self) -> str:
@@ -32,11 +36,6 @@ class Config:
             except Exception as e:  # noqa: BLE001
                 log.warning("解密 API Key 失败（回退明文）: %s", e)
         return os.getenv("DEEPSEEK_API_KEY", "").strip()
-
-        self.report = self.data.get("report", {}) or {}
-        self.network = self.data.get("network", {}) or {}
-        self.ai_cfg = self.data.get("ai", {}) or {}
-        self.profile = self.data.get("user_profile", {}) or {}
 
     @property
     def ai_enabled(self) -> bool:

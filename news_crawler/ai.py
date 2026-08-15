@@ -26,6 +26,7 @@ class AIProcessor:
         self.retries = int(config.ai_cfg.get("max_retries", 3))
         self.batch = int(config.ai_cfg.get("batch_size", 15))
         self.concurrent = max(1, int(config.ai_cfg.get("concurrency", 4)))
+        self.thinking = (config.ai_cfg.get("thinking") or "").strip()
         self.profile = config.profile
         self.pricing = config.ai_cfg.get("pricing", {}) or {}
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0,
@@ -48,6 +49,8 @@ class AIProcessor:
             "max_tokens": 8192,  # 预留充足输出空间，避免大批量响应被截断
             "response_format": {"type": "json_object"},
         }
+        if self.thinking:
+            payload["thinking"] = {"type": self.thinking}
         last = None
         for _ in range(self.retries):
             try:

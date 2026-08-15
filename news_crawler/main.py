@@ -2,6 +2,7 @@
 import argparse
 import logging
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -94,8 +95,17 @@ def run(args):
                                            src_map.get(it.source))
             return it
 
-        with ThreadPoolExecutor(max_workers=12) as ex:
-            list(ex.map(_ft, ft_items))
+        def _run_ft_batch():
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                list(ex.map(_ft, ft_items))
+
+        # 全文阶段整体设截止时间，个别病态页面再慢也不会拖死整个流程
+        _ft_thread = threading.Thread(target=_run_ft_batch, daemon=True)
+        _ft_thread.start()
+        _ft_deadline = 120
+        _ft_thread.join(_ft_deadline)
+        if _ft_thread.is_alive():
+            log.warning("全文抓取超时（>%ds），跳过剩余以继续", _ft_deadline)
         n = sum(1 for it in ft_items if it.full_text)
         log.info("已抓取 %d 条正文全文", n)
 

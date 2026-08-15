@@ -27,6 +27,7 @@ ai:
   base_url: "https://api.deepseek.com"
   model: "deepseek-v4-flash"
   batch_size: 25                     # 每批提交给 AI 的条数（控制成本与响应速度）
+  thinking: "disabled"               # 关闭 v4-flash 的推理以提速降本（deepseek-chat 时代遗留可选）
   concurrency: 4                     # 并发提交的 AI 批次数量（加速，质量不变）
   timeout: 120
   max_retries: 3
