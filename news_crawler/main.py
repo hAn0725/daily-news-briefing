@@ -36,6 +36,9 @@ def setup_logging(config, date_str):
             logging.StreamHandler(),
         ],
     )
+    # 静默 trafilatura 的解析噪声日志（"discarding data" 等属正常提示）
+    for _name in ("trafilatura", "trafilatura.core", "trafilatura.settings"):
+        logging.getLogger(_name).setLevel(logging.ERROR)
 
 
 def run(args):

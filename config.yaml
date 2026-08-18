@@ -31,10 +31,11 @@ ai:
   concurrency: 4                     # 并发提交的 AI 批次数量（加速，质量不变）
   timeout: 120
   max_retries: 3
-  # 计费单价（元/百万 tokens），用于估算本次生成费用，可随官方调价更新
+  # 计费单价（元/百万 tokens），用于估算本次生成费用；按官方 V4 定价【峰值 + 输入缓存未命中】取值（更保守）
+  # v4-flash: 输入峰值 $0.44 / 输出峰值 $1.32，汇率按 ¥7.2 折算；非峰值时段约为一半
   pricing:
-    input_per_million: 1.0           # 输入（未命中缓存）价格
-    output_per_million: 2.0          # 输出价格
+    input_per_million: 3.2           # v4-flash 输入（缓存未命中）≈ ¥3.17/百万
+    output_per_million: 9.5          # v4-flash 输出 ≈ ¥9.50/百万
 
 # ---------- 网络设置 ----------
 network:
