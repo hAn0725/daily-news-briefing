@@ -8,13 +8,18 @@
 """
 import base64
 import getpass
+import os
 import sys
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
+from dotenv import load_dotenv  # noqa: E402
+
 from news_crawler.secure import protect  # noqa: E402
+
+load_dotenv(BASE / ".env")
 
 
 def main():
@@ -47,17 +52,26 @@ def main():
     env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
     print("[完成] 授权码已加密写入 .env 的 QQ_SMTP_AUTH_ENC，明文不落盘。")
 
-    # ---- 登录验证 ----
+    # ---- 登录验证（发件邮箱：.env 优先 → config.yaml 兼容 → 交互输入并写入 .env）----
     try:
         import smtplib
 
         import yaml
-        cfg = yaml.safe_load((BASE / "config.yaml").read_text(encoding="utf-8")) or {}
-        mail = cfg.get("email", {}) or {}
-        user = (mail.get("from_addr") or "").strip()
+        user = os.getenv("SMTP_FROM_ADDR", "").strip()
         if not user:
-            print("[提示] config.yaml 里尚未填写 email.from_addr，跳过登录验证。")
-            return 0
+            cfg = yaml.safe_load(
+                (BASE / "config.yaml").read_text(encoding="utf-8")) or {}
+            user = ((cfg.get("email", {}) or {}).get("from_addr") or "").strip()
+        if not user:
+            user = input("请输入你的 QQ 邮箱地址（如 123456789@qq.com）: ").strip()
+            if not user:
+                print("[提示] 未输入邮箱，跳过登录验证。")
+                return 0
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+            if not any(ln.startswith("SMTP_FROM_ADDR=") for ln in lines):
+                lines.append(f"SMTP_FROM_ADDR={user}")
+                env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            print("[完成] 发件邮箱已存入 .env 的 SMTP_FROM_ADDR（仅本地，不进公开仓库）。")
         host = (mail.get("smtp_host") or "smtp.qq.com").strip()
         port = int(mail.get("smtp_port", 465))
         print(f"正在验证登录 {host}:{port}（{user}）...")

@@ -53,6 +53,23 @@ class Config:
         return os.getenv("QQ_SMTP_AUTH", "").strip()
 
     @property
+    def email_from(self) -> str:
+        """发件邮箱：优先 .env 的 SMTP_FROM_ADDR（避免公开仓库泄露），兼容旧 config.yaml"""
+        return (os.getenv("SMTP_FROM_ADDR", "").strip()
+                or str(self.email.get("from_addr") or "").strip())
+
+    @property
+    def email_to(self) -> list:
+        """收件邮箱列表：优先 .env 的 SMTP_TO_ADDRS（英文逗号分隔），兼容旧 config.yaml"""
+        v = os.getenv("SMTP_TO_ADDRS", "").strip()
+        if v:
+            return [x.strip() for x in v.split(",") if x.strip()]
+        cfg = self.email.get("to_addrs") or []
+        if isinstance(cfg, str):
+            return [x.strip() for x in cfg.split(",") if x.strip()]
+        return [str(x).strip() for x in cfg if str(x).strip()]
+
+    @property
     def ai_enabled(self) -> bool:
         return bool(self.ai_cfg.get("enabled", True)) and bool(self.api_key)
 

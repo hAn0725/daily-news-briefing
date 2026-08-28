@@ -17,14 +17,6 @@ from pathlib import Path
 log = logging.getLogger("news")
 
 
-def _as_list(v):
-    if not v:
-        return []
-    if isinstance(v, str):
-        return [x.strip() for x in v.split(",") if x.strip()]
-    return [str(x).strip() for x in v if str(x).strip()]
-
-
 def _deliver(host, port, use_ssl, msg, sender, to_addrs, password):
     """建立 SMTP 连接并发送（465 用 SSL，其它端口用 STARTTLS）"""
     if use_ssl:
@@ -46,13 +38,13 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
 
     host = (cfg.get("smtp_host") or "smtp.qq.com").strip()
     port = int(cfg.get("smtp_port", 465))
-    sender = (cfg.get("from_addr") or "").strip()
-    to_addrs = _as_list(cfg.get("to_addrs"))
+    sender = config.email_from
+    to_addrs = config.email_to or ([sender] if sender else [])
     prefix = (cfg.get("subject_prefix") or "【每日新闻简报】").strip()
     password = config.smtp_password
 
     missing = [name for name, val in
-               (("email.from_addr", sender), ("email.to_addrs", to_addrs),
+               (("发件邮箱(.env: SMTP_FROM_ADDR)", sender),
                 ("SMTP授权码(运行 tools/store_smtp.py 录入)", password))
                if not val]
     if missing:

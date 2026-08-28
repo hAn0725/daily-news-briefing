@@ -67,9 +67,9 @@ email:
   enabled: true
   smtp_host: "smtp.qq.com"
   smtp_port: 465              # QQ 邮箱 SSL 端口
-  from_addr: "your_email@example.com"   # 发件邮箱（必须与授权码所属账号一致）
-  to_addrs:
-    - "your_email@example.com"          # 收件邮箱
+  # 发件/收件邮箱不写在本文件（避免公开仓库泄露），请在 .env 中设置：
+  #   SMTP_FROM_ADDR=你的QQ邮箱        （发件邮箱，须与授权码所属账号一致）
+  #   SMTP_TO_ADDRS=收件邮箱            （多个用英文逗号分隔；留空则发给自己）
   subject_prefix: "【每日新闻简报】"
   attach_html: true           # 除 HTML 正文外，同时附上报告文件
 

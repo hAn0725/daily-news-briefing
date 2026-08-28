@@ -60,8 +60,8 @@ python -m news_crawler.main --wait-net           # 先检测 VPN/外网再生成
 
 **首次配置邮箱（必须一次）**：
 1. QQ 邮箱网页版 → 设置 → 账户 → **POP3/SMTP 服务 → 开启**并生成**授权码**（16 位纯字母数字，不是 QQ 密码）；
-2. 终端运行 `python tools/store_smtp.py`，粘贴授权码（不回显，自动加密存入 `.env` 并验证登录）；
-3. `config.yaml` 的 `email.from_addr` / `to_addrs` 已填好你的 QQ 邮箱，可自行修改。
+2. 终端运行 `python tools/store_smtp.py`，粘贴授权码（不回显，自动加密存入 `.env` 并验证登录）；首次运行会顺带输入 QQ 邮箱地址，存在本地 `.env`，**不进公开仓库**；
+3. 收件邮箱在 `.env` 的 `SMTP_TO_ADDRS` 配置（多个用英文逗号分隔，留空则发给自己）。
 
 **注册/更新定时任务**：双击 `install_task.bat`（任务名 `DailyNewsReport`，错过 07:00 会在开机/唤醒后补跑），或命令行：
 
