@@ -45,6 +45,34 @@ network:
   # 留空 = 直连（此时国外源可能无法访问）。
   proxy: "http://127.0.0.1:7892"
 
+# ---------- 定时与联网检测（计划任务 run_daily.bat / --wait-net 使用）----------
+schedule:
+  timezone: "Asia/Shanghai"
+  retry_interval_minutes: 5   # 未联网/VPN未开时，每隔多少分钟重试一次
+  deadline: "23:00"           # 当天到此时间仍未联网则放弃，次日 07:00 计划任务再试
+  # 高峰时段定义：生成只发生在空闲时段（其余时间均为空闲）
+  # days: 0=周一 … 6=周日
+  peak_periods:
+    - days: [0, 1, 2, 3, 4]
+      start: "09:00"
+      end: "12:00"
+    - days: [0, 1, 2, 3, 4]
+      start: "14:00"
+      end: "18:00"
+
+# ---------- 邮件发送（QQ 邮箱）----------
+# 授权码不写在这里！先在 QQ 邮箱网页版开启 SMTP 服务拿到授权码，
+# 再运行 tools/store_smtp.py 录入（加密存入 .env，不落明文）。
+email:
+  enabled: true
+  smtp_host: "smtp.qq.com"
+  smtp_port: 465              # QQ 邮箱 SSL 端口
+  from_addr: "your_email@example.com"   # 发件邮箱（必须与授权码所属账号一致）
+  to_addrs:
+    - "your_email@example.com"          # 收件邮箱
+  subject_prefix: "【每日新闻简报】"
+  attach_html: true           # 除 HTML 正文外，同时附上报告文件
+
 # ---------- 用户画像（AI 据此筛选与加权，可随时调整）----------
 user_profile:
   background: "光电信息科学与工程专业本科生，正在探索专业方向；同时是刚入门的股民/投资者。"

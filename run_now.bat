@@ -1,8 +1,8 @@
 @echo off
 rem ============================================================
-rem 每日新闻简报 - 一键生成并打开
-rem 双击运行：自动抓取 → AI 处理 → 生成 HTML → 自动打开
-rem 成功约 3 秒后自动关闭窗口；出错则停留显示错误
+rem 每日新闻简报 - 一键生成（手动）
+rem 双击运行：自动抓取 → AI 处理 → 生成 HTML → 发送到 QQ 邮箱
+rem 不再自动打开报告；成功约 3 秒后自动关闭窗口，出错则停留显示
 rem ============================================================
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
@@ -34,20 +34,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-for /f "delims=" %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set "D=%%d"
-set "MONTH=%D:~0,7%"
-set "HTML=%~dp0output\%MONTH%\%D%.html"
-
-if exist "%HTML%" (
-    echo.
-    echo 生成完成！正在打开报告...
-    start "" "%HTML%"
-    timeout /t 6 >nul
-    exit /b 0
-)
-
 echo.
-echo [错误] 未找到报告文件，请检查 logs 目录下的日志排查原因。
-pause
-exit /b 1
+echo 生成完成！报告已保存到 output 目录并发送到邮箱（若已配置授权码）。
+echo 可在 output\ 年月\ 目录下找到当天的 HTML 报告。
+timeout /t 6 >nul
+exit /b 0
 

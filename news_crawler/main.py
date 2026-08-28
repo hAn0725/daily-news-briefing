@@ -1,4 +1,8 @@
-"""主流程：采集 → 过滤 → 去重 → 全文 → AI/本地处理 → 生成报告 → 清理"""
+"""主流程：等待联网 → 采集 → 过滤 → 去重 → 全文 → AI/本地处理 → 生成报告 → 发送邮件 → 清理
+
+计划任务模式（--wait-net）：生成前检测 VPN/外网，未通则每 5 分钟重试直到当天截止
+时间（默认 23:00），且只在空闲时段生成；生成后自动把报告发送到 QQ 邮箱。
+"""
 import argparse
 import logging
 import sys
@@ -21,6 +25,8 @@ from news_crawler.filter import filter_items  # noqa: E402
 from news_crawler.fulltext import fetch_full_text  # noqa: E402
 from news_crawler.market import fetch_market_data  # noqa: E402
 from news_crawler import nlp_local  # noqa: E402
+from news_crawler.mail import send_report_email  # noqa: E402
+from news_crawler.netcheck import wait_until_ready  # noqa: E402
 from news_crawler.report import generate_report  # noqa: E402
 
 
@@ -46,6 +52,12 @@ def run(args):
     date_str = args.date or datetime.now().strftime("%Y-%m-%d")
     setup_logging(config, date_str)
     log = logging.getLogger("news")
+
+    # ---------- 0. 计划任务模式：等待 VPN/外网 + 空闲时段 ----------
+    # 未联网每 5 分钟重试、高峰时段自动延后，直到生成或当天截止；生成后不再检测。
+    if args.wait_net and not wait_until_ready(config, log):
+        return 2
+
     log.info("===== 开始生成 %s 的每日新闻简报 =====", date_str)
 
     hours_back = int(config.report.get("hours_back", 26))
@@ -191,7 +203,19 @@ def run(args):
     for p in paths:
         log.info("已生成: %s", p)
 
-    # ---------- 9. 清理旧报告 ----------
+    # ---------- 9. 发送邮件（失败不影响报告已保存）----------
+    if args.no_mail:
+        log.info("已跳过邮件发送（--no-mail）")
+    else:
+        counts = {}
+        for k, lst in grouped.items():
+            title = (config.categories.get(k) or {}).get("title") or k
+            counts[title] = len(lst)
+        ok, msg = send_report_email(config, paths, date_str,
+                                    summary=summary, cat_counts=counts)
+        (log.info if ok else log.error)("邮件发送: %s", msg)
+
+    # ---------- 10. 清理旧报告 ----------
     keep_days = int(config.report.get("keep_days", 30))
     cleanup_old(out_dir, keep_days)
     log.info("===== 完成 =====")
@@ -204,6 +228,9 @@ def parse_args():
     p.add_argument("--config", default="", help="配置文件路径")
     p.add_argument("--no-ai", action="store_true", help="强制使用本地处理")
     p.add_argument("--no-market", action="store_true", help="跳过财经数据")
+    p.add_argument("--wait-net", action="store_true",
+                   help="生成前检测 VPN/外网，未通每5分钟重试直到当天截止（计划任务用）")
+    p.add_argument("--no-mail", action="store_true", help="跳过邮件发送")
     return p.parse_args()
 
 

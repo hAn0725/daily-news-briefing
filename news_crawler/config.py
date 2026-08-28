@@ -23,6 +23,8 @@ class Config:
         self.network = self.data.get("network", {}) or {}
         self.ai_cfg = self.data.get("ai", {}) or {}
         self.profile = self.data.get("user_profile", {}) or {}
+        self.email = self.data.get("email", {}) or {}
+        self.schedule = self.data.get("schedule", {}) or {}
         self.api_key = self._load_api_key()
 
     def _load_api_key(self) -> str:
@@ -36,6 +38,19 @@ class Config:
             except Exception as e:  # noqa: BLE001
                 log.warning("解密 API Key 失败（回退明文）: %s", e)
         return os.getenv("DEEPSEEK_API_KEY", "").strip()
+
+    @property
+    def smtp_password(self) -> str:
+        """QQ 邮箱 SMTP 授权码：优先解密 .env 中加密的 QQ_SMTP_AUTH_ENC；兼容旧明文"""
+        import base64
+        enc = os.getenv("QQ_SMTP_AUTH_ENC", "").strip()
+        if enc:
+            try:
+                from .secure import unprotect
+                return unprotect(base64.b64decode(enc)).decode("utf-8").strip()
+            except Exception as e:  # noqa: BLE001
+                log.warning("解密 QQ SMTP 授权码失败（回退明文）: %s", e)
+        return os.getenv("QQ_SMTP_AUTH", "").strip()
 
     @property
     def ai_enabled(self) -> bool:
