@@ -1,7 +1,7 @@
 """抓取模块：RSS + JSON 热榜，支持代理、超时、重试、单源容错"""
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -26,7 +26,7 @@ def parse_dt(struct_time):
     if not struct_time:
         return None
     try:
-        dt = datetime(*struct_time[:6], tzinfo=timezone.utc)
+        dt = datetime(*struct_time[:6], tzinfo=UTC)
         return dt.astimezone(TZ)
     except Exception:
         return None
@@ -36,6 +36,8 @@ class Fetcher:
     def __init__(self, config):
         self.timeout = int(config.network.get("request_timeout", 20))
         self.retries = int(config.network.get("retries", 2))
+        self.max_items_per_source = int(
+            config.report.get("max_items_per_source", 50))
         self.proxies = config.proxy_dict
         self.headers = {
             "User-Agent": (
@@ -69,16 +71,24 @@ class Fetcher:
             except Exception as e:  # noqa: BLE001
                 last = e
                 if i < self.retries:
-                    time.sleep(1.5)  # 重试前短暂退避，缓解瞬时超时
+                    time.sleep(min(8, 1.5 * (2 ** i)))
         raise last
 
     # ---------------- 入口 ----------------
     def fetch_source(self, source: Source):
         if source.type == "rss":
-            return self._retry(lambda: self.fetch_rss(source))
-        if source.type == "json":
-            return self._retry(lambda: self.fetch_json(source))
-        raise ValueError(f"未知源类型: {source.type}")
+            items = self._retry(lambda: self.fetch_rss(source))
+        elif source.type == "json":
+            items = self._retry(lambda: self.fetch_json(source))
+        else:
+            raise ValueError(f"未知源类型: {source.type}")
+        if self.max_items_per_source <= 0:
+            return []
+        # RSS 不保证按时间排序；优先保留最新的条目，无时间热榜保持原顺序。
+        dated = [item for item in items if item.published is not None]
+        undated = [item for item in items if item.published is None]
+        dated.sort(key=lambda item: item.published, reverse=True)
+        return (dated + undated)[:self.max_items_per_source]
 
     # ---------------- RSS ----------------
     def fetch_rss(self, source: Source):

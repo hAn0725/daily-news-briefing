@@ -1,29 +1,6 @@
 """重点源正文抓取：提取网页正文供 AI 做更准确的摘要，失败回退空串"""
-import threading
-
 import requests
 import trafilatura
-
-
-def _wall_timeout_guard(fn, limit: float):
-    """在守护线程中执行 fn，强制墙钟超时，防止慢速/滴流服务器无限挂起。
-    超时返回 None（守护线程被丢弃，不影响进程退出）。"""
-    box = {}
-
-    def worker():
-        try:
-            box["result"] = fn()
-        except Exception as e:  # noqa: BLE001
-            box["err"] = e
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    t.join(limit)
-    if t.is_alive():
-        return None
-    if "err" in box:
-        raise box["err"]
-    return box.get("result")
 
 
 def fetch_full_text(url: str, config, source=None, max_len: int = 1800) -> str:
@@ -60,9 +37,6 @@ def fetch_full_text(url: str, config, source=None, max_len: int = 1800) -> str:
                                            include_tables=False)
                 return (text or "").strip()[:max_len]
 
-        result = _wall_timeout_guard(_do, timeout + 8)
-        if not result:
-            return ""
-        return result
+        return _do() or ""
     except Exception:  # noqa: BLE001
         return ""

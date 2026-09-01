@@ -1,4 +1,4 @@
-"""邮件发送：把生成的 HTML 简报发送到 QQ 邮箱（SMTP SSL）。
+"""邮件发送：把生成的 PDF 简报发送到 QQ 邮箱（SMTP SSL）。
 
 授权码优先读取 .env 中 DPAPI 加密的 QQ_SMTP_AUTH_ENC
 （由 tools/store_smtp.py 录入生成，绑定当前 Windows 用户与本机），
@@ -31,7 +31,11 @@ def _deliver(host, port, use_ssl, msg, sender, to_addrs, password):
 
 
 def send_report_email(config, paths, date_str, summary="", cat_counts=None):
-    """发送报告邮件；返回 (是否成功, 说明文字)。失败只记日志，不影响报告已保存。"""
+    """发送 PDF 报告邮件；返回 (是否成功, 说明文字)。
+
+    HTML 仅作为本地备份，邮件不再嵌入或附带 HTML，避免不同
+    邮件客户端的排版差异。
+    """
     cfg = config.email or {}
     if not cfg.get("enabled", False):
         return False, "未启用（config.yaml: email.enabled=false）"
@@ -50,10 +54,10 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
     if missing:
         return False, "邮箱配置不完整，缺少: " + "、".join(missing)
 
-    # HTML 报告既作正文也作附件
-    html_path = next((Path(p) for p in paths if str(p).lower().endswith(".html")),
-                     Path(paths[0]))
-    html_str = html_path.read_text(encoding="utf-8")
+    pdf_path = next((Path(p) for p in paths if str(p).lower().endswith(".pdf")),
+                    None)
+    if pdf_path is None or not pdf_path.is_file():
+        return False, "PDF 报告未生成，已跳过邮件发送"
 
     # ---- 纯文本摘要部分 ----
     plain = [f"这是 {date_str} 的每日新闻简报（程序自动生成）。"]
@@ -62,7 +66,7 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
             f"{k} {v} 条" for k, v in cat_counts.items()))
     if summary:
         plain += ["", "—— 今日综述 ——", summary]
-    plain += ["", "完整排版报告见下方 HTML 正文；若邮件客户端样式异常，请查看附件。"]
+    plain += ["", "完整日报请查看附件 PDF。"]
     plain_text = "\n".join(plain)
 
     subject = f"{prefix}{date_str}"
@@ -73,16 +77,11 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
     msg["To"] = ", ".join(to_addrs)
     msg["Date"] = formatdate(localtime=True)
 
-    alt = MIMEMultipart("alternative")
-    alt.attach(MIMEText(plain_text, "plain", "utf-8"))
-    alt.attach(MIMEText(html_str, "html", "utf-8"))
-    msg.attach(alt)
-
-    if cfg.get("attach_html", True):
-        att = MIMEApplication(html_str.encode("utf-8"))
-        att.add_header("Content-Disposition", "attachment",
-                       filename=f"news_{date_str}.html")
-        msg.attach(att)
+    msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+    att = MIMEApplication(pdf_path.read_bytes(), _subtype="pdf")
+    att.add_header("Content-Disposition", "attachment",
+                   filename=f"news_{date_str}.pdf")
+    msg.attach(att)
 
     # 发送（带重试与端口回退）：实测网络偶发瞬断（Connection unexpectedly
     # closed），同一端口重试一次，465 失败再自动换 587 STARTTLS 兼一段

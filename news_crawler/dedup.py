@@ -38,7 +38,7 @@ def dedup_items(items, threshold: float = 0.85, key=None, prefer_score: bool = F
         ng = _ngrams(n)
         ln = len(n)
         dup = -1
-        for i, (s, sg, sl) in enumerate(zip(seen, seen_ng, seen_len)):
+        for i, (s, sg, sl) in enumerate(zip(seen, seen_ng, seen_len, strict=False)):
             # 长度相差过大（ratio>=threshold 时不可能）或无公共 n-gram：直接跳过
             if not (len_low <= ln / sl <= len_high):
                 continue

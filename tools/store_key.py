@@ -14,6 +14,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 from dotenv import load_dotenv  # noqa: E402
+
 from news_crawler.secure import protect  # noqa: E402
 
 load_dotenv(BASE / ".env")

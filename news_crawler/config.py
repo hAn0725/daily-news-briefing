@@ -1,7 +1,9 @@
 """加载配置与环境变量"""
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 from dotenv import load_dotenv
@@ -13,19 +15,90 @@ load_dotenv(BASE_DIR / ".env")
 log = logging.getLogger("news")
 
 
+class ConfigError(ValueError):
+    """Raised when configuration cannot be used safely."""
+
+
 class Config:
     def __init__(self, path: str = ""):
         self.base_dir = BASE_DIR
         cfg_path = Path(path) if path else BASE_DIR / "config.yaml"
         with open(cfg_path, encoding="utf-8") as f:
             self.data = yaml.safe_load(f) or {}
+        if not isinstance(self.data, Mapping):
+            raise ConfigError("配置文件根节点必须是 YAML 对象")
         self.report = self.data.get("report", {}) or {}
         self.network = self.data.get("network", {}) or {}
         self.ai_cfg = self.data.get("ai", {}) or {}
         self.profile = self.data.get("user_profile", {}) or {}
         self.email = self.data.get("email", {}) or {}
         self.schedule = self.data.get("schedule", {}) or {}
+        self._validate()
         self.api_key = self._load_api_key()
+
+    def _validate(self):
+        """Fail early for values that would otherwise break a scheduled run."""
+        sections = {
+            "report": self.report, "network": self.network,
+            "ai": self.ai_cfg, "email": self.email, "schedule": self.schedule,
+            "user_profile": self.profile,
+        }
+        for name, value in sections.items():
+            if not isinstance(value, Mapping):
+                raise ConfigError(f"{name} 必须是 YAML 对象")
+
+        def non_negative(section, key, default=0):
+            value = sections[section].get(key, default)
+            try:
+                if int(value) < 0:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"{section}.{key} 必须是非负整数") from exc
+
+        def positive(section, key, default=1):
+            value = sections[section].get(key, default)
+            try:
+                if int(value) <= 0:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"{section}.{key} 必须是正整数") from exc
+
+        for key in ("hours_back", "keep_days", "fulltext_cap",
+                    "max_items_per_source"):
+            non_negative("report", key)
+        positive("network", "request_timeout", 15)
+        non_negative("network", "retries")
+        positive("ai", "timeout", 120)
+        non_negative("ai", "max_retries")
+        for key in ("batch_size", "concurrency"):
+            positive("ai", key)
+        pdf_cfg = self.report.get("pdf", {}) or {}
+        if not isinstance(pdf_cfg, Mapping):
+            raise ConfigError("report.pdf 必须是 YAML 对象")
+        categories = self.report.get("categories", {}) or {}
+        if not isinstance(categories, Mapping):
+            raise ConfigError("report.categories 必须是 YAML 对象")
+        for name, category in categories.items():
+            if not isinstance(category, Mapping):
+                raise ConfigError(f"report.categories.{name} 必须是 YAML 对象")
+            try:
+                if int(category.get("max_items", 10)) < 0:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"report.categories.{name}.max_items 必须是非负整数") from exc
+
+        sources = self.data.get("sources", []) or []
+        if not isinstance(sources, list):
+            raise ConfigError("sources 必须是 YAML 列表")
+        for i, source in enumerate(sources, 1):
+            if not isinstance(source, Mapping):
+                raise ConfigError(f"sources[{i}] 必须是 YAML 对象")
+            url = str(source.get("url") or "")
+            if urlparse(url).scheme not in {"http", "https"}:
+                raise ConfigError(f"sources[{i}].url 必须是 HTTP(S) 地址")
+            if source.get("type") not in {"rss", "json"}:
+                raise ConfigError(f"sources[{i}].type 仅支持 rss 或 json")
 
     def _load_api_key(self) -> str:
         """优先解密 .env 中的加密 Key（Windows DPAPI，绑定当前用户）；兼容旧明文"""

@@ -9,7 +9,11 @@ report:
   logs_dir: "logs"
   keep_days: 30           # 自动清理 N 天前的旧报告
   fulltext_cap: 60        # 最多抓取多少条正文全文（越大摘要越详实，耗时略增）
+  max_items_per_source: 50 # 单个源进入后续处理的最大条数，控制失效 RSS 和 AI 成本
   post_dedup_threshold: 0.5   # 本地模式/兜底时的摘要相似度去重阈值（AI 模式下用语义去重更准）
+  pdf:
+    enabled: true
+    keep_html: true       # HTML 作为本地备份，邮件仅发送 PDF
   categories:
     finance:
       title: "财经与股市"
@@ -71,7 +75,7 @@ email:
   #   SMTP_FROM_ADDR=你的QQ邮箱        （发件邮箱，须与授权码所属账号一致）
   #   SMTP_TO_ADDRS=收件邮箱            （多个用英文逗号分隔；留空则发给自己）
   subject_prefix: "【每日新闻简报】"
-  attach_html: true           # 除 HTML 正文外，同时附上报告文件
+  # 邮件始终发送 PDF 附件；HTML 只作为 report.pdf.keep_html 控制的本地备份
 
 # ---------- 用户画像（AI 据此筛选与加权，可随时调整）----------
 user_profile:

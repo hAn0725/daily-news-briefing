@@ -1,7 +1,6 @@
 """数据模型：新闻源与新闻条目"""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -23,7 +22,7 @@ class NewsItem:
     summary: str = ""
     full_text: str = ""
     language: str = "zh"
-    published: Optional[datetime] = None
+    published: datetime | None = None
     hot_score: int = 0
 
     # ---- 处理后字段 ----

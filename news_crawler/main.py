@@ -6,8 +6,7 @@
 import argparse
 import logging
 import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,16 +15,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from news_crawler import nlp_local  # noqa: E402
 from news_crawler.ai import AIProcessor  # noqa: E402
 from news_crawler.cleanup import cleanup_old  # noqa: E402
 from news_crawler.config import Config  # noqa: E402
 from news_crawler.dedup import dedup_items  # noqa: E402
+from news_crawler.delivery import (  # noqa: E402
+    already_sent,
+    mark_sent,
+    report_fingerprint,
+)
 from news_crawler.fetcher import Fetcher  # noqa: E402
 from news_crawler.filter import filter_items  # noqa: E402
 from news_crawler.fulltext import fetch_full_text  # noqa: E402
-from news_crawler.market import fetch_market_data  # noqa: E402
-from news_crawler import nlp_local  # noqa: E402
 from news_crawler.mail import send_report_email  # noqa: E402
+from news_crawler.market import fetch_market_data  # noqa: E402
 from news_crawler.netcheck import wait_until_ready  # noqa: E402
 from news_crawler.report import generate_report  # noqa: E402
 
@@ -49,7 +53,13 @@ def setup_logging(config, date_str):
 
 def run(args):
     config = Config(args.config)
-    date_str = args.date or datetime.now().strftime("%Y-%m-%d")
+    if args.date:
+        try:
+            date_str = datetime.strptime(args.date, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("--date 必须是 YYYY-MM-DD 格式") from exc
+    else:
+        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
     setup_logging(config, date_str)
     log = logging.getLogger("news")
 
@@ -105,21 +115,31 @@ def run(args):
     ft_cap = int(config.report.get("fulltext_cap", 60))
     ft_items = [it for it in items if it.source in ft_sources][:ft_cap]
     if ft_items:
+        ft_results = []
+
         def _ft(it):
-            it.full_text = fetch_full_text(it.url, config,
-                                           src_map.get(it.source))
-            return it
+            return it, fetch_full_text(it.url, config, src_map.get(it.source))
 
         def _run_ft_batch():
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                list(ex.map(_ft, ft_items))
+            executor = ThreadPoolExecutor(max_workers=12)
+            futures = [executor.submit(_ft, item) for item in ft_items]
+            done, pending = wait(futures, timeout=120)
+            for future in done:
+                try:
+                    ft_results.append(future.result())
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Full-text fetch failed: %s", e)
+            for future in pending:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            return len(pending)
 
         # 全文阶段整体设截止时间，个别病态页面再慢也不会拖死整个流程
-        _ft_thread = threading.Thread(target=_run_ft_batch, daemon=True)
-        _ft_thread.start()
         _ft_deadline = 120
-        _ft_thread.join(_ft_deadline)
-        if _ft_thread.is_alive():
+        pending_count = _run_ft_batch()
+        for item, full_text in ft_results:
+            item.full_text = full_text
+        if pending_count:
             log.warning("全文抓取超时（>%ds），跳过剩余以继续", _ft_deadline)
         n = sum(1 for it in ft_items if it.full_text)
         log.info("已抓取 %d 条正文全文", n)
@@ -211,8 +231,19 @@ def run(args):
         for k, lst in grouped.items():
             title = (config.categories.get(k) or {}).get("title") or k
             counts[title] = len(lst)
-        ok, msg = send_report_email(config, paths, date_str,
-                                    summary=summary, cat_counts=counts)
+        pdf_path = next((Path(p) for p in paths
+                         if str(p).lower().endswith(".pdf")), None)
+        state_path = (BASE_DIR / config.report.get("logs_dir", "logs") /
+                      "delivery_state.json")
+        fingerprint = report_fingerprint(grouped, summary, market)
+        if (pdf_path is not None and not args.resend_mail and
+                already_sent(state_path, date_str, fingerprint)):
+            ok, msg = True, "PDF unchanged since successful delivery; skipped"
+        else:
+            ok, msg = send_report_email(config, paths, date_str,
+                                        summary=summary, cat_counts=counts)
+            if ok and pdf_path is not None:
+                mark_sent(state_path, date_str, fingerprint)
         (log.info if ok else log.error)("邮件发送: %s", msg)
 
     # ---------- 10. 清理旧报告 ----------
@@ -223,7 +254,7 @@ def run(args):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="每日新闻采集与 HTML 报告")
+    p = argparse.ArgumentParser(description="每日新闻采集与 PDF 报告")
     p.add_argument("--date", default="", help="报告日期 YYYY-MM-DD（默认今天）")
     p.add_argument("--config", default="", help="配置文件路径")
     p.add_argument("--no-ai", action="store_true", help="强制使用本地处理")
@@ -231,6 +262,8 @@ def parse_args():
     p.add_argument("--wait-net", action="store_true",
                    help="生成前检测 VPN/外网，未通每5分钟重试直到当天截止（计划任务用）")
     p.add_argument("--no-mail", action="store_true", help="跳过邮件发送")
+    p.add_argument("--resend-mail", action="store_true",
+                   help="忽略成功发送记录，强制重新发送 PDF")
     return p.parse_args()
 
 

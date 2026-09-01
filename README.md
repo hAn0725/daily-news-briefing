@@ -1,13 +1,13 @@
-# 每日新闻简报（个性化 HTML 日报）
+# 每日新闻简报（个性化 PDF 日报）
 
-自动采集国内外新闻源，用 DeepSeek AI 智能处理（摘要、英文翻译、分类、今日综述、跨源去重），生成**护眼风的中文 HTML 日报**并**自动发送到你的 QQ 邮箱**，15 分钟即可读完。支持每天 07:00 定时生成：生成前自动检测 VPN/外网，未连通则每 5 分钟重试（当天 23:00 截止），且只在空闲时段生成。
+自动采集国内外新闻源，用 DeepSeek AI 智能处理（摘要、英文翻译、分类、今日综述、跨源去重），生成**护眼风的中文 PDF 日报**并**自动发送到你的 QQ 邮箱**。HTML 仅作为本地备份，不会出现在邮件中。
 
 ## 功能特点
 
 - 📡 **国内外 17 个新闻源**：科技（少数派、钛媒体、极客公园、爱范儿、Hacker News、The Verge、TechCrunch 等）、财经（CNBC、MarketWatch 等）、国际（NPR、DW 德国之声、The Guardian、Al Jazeera、NHK 等，全部使用原版英文源）
 - 🌐 **国外源自动走你的梯子代理**，国内源直连
 - 🤖 **DeepSeek V4-Flash AI 全流程**（已关闭推理提速降本）：智能摘要、英文翻译成中文（**双语对照**）、智能分类、剔除低质/八卦内容、生成"今日要闻综述"
-- 🎨 **深色护眼主题 HTML**（柔和深灰底 + 低饱和文字，低蓝光、低对比度、久看不累）
+- 🎨 **适合邮件阅读的 PDF**（清晰层级、中文字体、分页与页码），并可保留深色护眼 HTML 备份
 - 📊 **财经数据速览**：A股/港股/美股指数、汇率、金价
 - 🧠 **个性化**：按你的画像（光电专业 + 股民）加权筛选，聚焦半导体/AI/新能源/军工等持仓板块
 - 🔄 **AI 不可用时自动回退**本地处理，保证每天都能出报告
@@ -20,9 +20,10 @@
 ### 1. 安装依赖
 
 ```bash
-# 首次安装依赖（国内建议加清华镜像）
-pip install -r requirements.txt
-# 纯 Python 生成 HTML，无需浏览器/Playwright
+# 首次安装：建立项目专用环境并安装依赖
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+# 生成 PDF 不需浏览器/Playwright；运行脚本会优先使用 .venv
 ```
 
 ### 2. 配置
@@ -41,7 +42,7 @@ DEEPSEEK_API_KEY=sk-你的密钥
 
 ### 3. 一键生成（手动）
 
-**双击桌面「每日新闻」图标**（或双击 `run_now.bat`）→ 自动抓取 → AI 处理（含跨源去重）→ 生成 HTML → **发送到 QQ 邮箱**（不再自动打开），约 1-2 分钟。
+**双击桌面「每日新闻」图标**（或双击 `run_now.bat`）→ 自动抓取 → AI 处理（含跨源去重）→ 生成 PDF → **发送到 QQ 邮箱**（不再自动打开），约 1-2 分钟。
 
 命令行方式：
 ```bash
@@ -49,14 +50,15 @@ python -m news_crawler.main
 python -m news_crawler.main --date 2026-08-10   # 指定日期
 python -m news_crawler.main --no-ai              # 强制本地处理（不调用 AI）
 python -m news_crawler.main --no-mail            # 只保存报告，不发邮件
+python -m news_crawler.main --resend-mail        # PDF 未变化时也强制重发
 python -m news_crawler.main --wait-net           # 先检测 VPN/外网再生成（计划任务模式）
 ```
 
-报告输出到 `output/2026-08/2026-08-10.html`。日志在 `logs/`。
+报告输出到 `output/2026-08/2026-08-10.pdf`（可选保留同名 HTML 备份）。QQ 邮件仅附带 PDF。日志在 `logs/`。
 
 ### 4. 定时生成 + 邮箱发送（默认启用）
 
-**流程**：每天 **07:00** 计划任务启动 → 检测 VPN/外网（**不通则每 5 分钟重试，当天 23:00 截止**；高峰时段 9-12/14-18 不生成，等空闲时段）→ 生成 HTML → 发送到 QQ 邮箱。生成成功后当天不再检测，也不再自动打开报告。
+**流程**：每天 **07:00** 计划任务启动 → 检测 VPN/外网（**不通则每 5 分钟重试，当天 23:00 截止**；高峰时段 9-12/14-18 不生成，等空闲时段）→ 生成 PDF → 发送到 QQ 邮箱。相同内容不会重复发送；生成成功后当天不再检测，也不再自动打开报告。
 
 **首次配置邮箱（必须一次）**：
 1. QQ 邮箱网页版 → 设置 → 账户 → **POP3/SMTP 服务 → 开启**并生成**授权码**（16 位纯字母数字，不是 QQ 密码）；
@@ -93,10 +95,10 @@ d:\新闻news\
 │   ├── nlp_local.py     # 本地回退处理
 │   ├── netcheck.py      # VPN/外网检测与等待（空闲时段调度）
 │   ├── mail.py          # QQ 邮箱 SMTP 发送报告
-│   ├── report.py        # 护眼风 HTML 报告生成
+│   ├── report.py        # PDF 日报 + HTML 备份生成
 │   ├── cleanup.py       # 清理过期报告
 │   └── main.py          # 主流程
-├── output\2026-08\      # 生成的 HTML 报告（按月归档）
+├── output\2026-08\      # 生成的 PDF/HTML 报告（按月归档）
 ├── logs\                # 运行日志
 ├── run_now.bat          # ★ 一键生成并发送邮箱（桌面快捷方式指向这里）
 ├── run_daily.bat        # 定时任务入口（07:00，含联网检测等待）
@@ -108,6 +110,17 @@ d:\新闻news\
     ├── store_key.py     # DeepSeek Key 加密录入
     └── store_smtp.py    # QQ 邮箱授权码加密录入
 ```
+
+## 开发检查
+
+```bash
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\ruff check .
+.venv\Scripts\pytest
+.venv\Scripts\python tools\qa_pdf.py output\2026-08\2026-08-10.pdf
+```
+
+`requirements.lock.txt` 记录当前已验证环境的精确版本；GitHub Actions 会在每次推送和 Pull Request 时自动运行静态检查与测试。
 
 ## 常见问题
 

@@ -15,7 +15,7 @@ def cleanup_old(output_dir, keep_days: int):
         return
     removed = 0
     for f in out.rglob("*"):
-        if f.is_file() and f.suffix.lower() in (".html",):
+        if f.is_file() and f.suffix.lower() in {".html", ".pdf"}:
             try:
                 if datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
                     f.unlink()

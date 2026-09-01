@@ -57,11 +57,12 @@ def main():
         import smtplib
 
         import yaml
+        cfg = yaml.safe_load(
+            (BASE / "config.yaml").read_text(encoding="utf-8")) or {}
+        mail = cfg.get("email", {}) or {}
         user = os.getenv("SMTP_FROM_ADDR", "").strip()
         if not user:
-            cfg = yaml.safe_load(
-                (BASE / "config.yaml").read_text(encoding="utf-8")) or {}
-            user = ((cfg.get("email", {}) or {}).get("from_addr") or "").strip()
+            user = (mail.get("from_addr") or "").strip()
         if not user:
             user = input("请输入你的 QQ 邮箱地址（如 123456789@qq.com）: ").strip()
             if not user:

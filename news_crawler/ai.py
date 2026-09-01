@@ -52,7 +52,8 @@ class AIProcessor:
         if self.thinking:
             payload["thinking"] = {"type": self.thinking}
         last = None
-        for _ in range(self.retries):
+        attempts = max(1, self.retries)
+        for attempt in range(attempts):
             try:
                 r = requests.post(f"{self.base}/chat/completions",
                                   headers=self.headers, json=payload,
@@ -67,9 +68,26 @@ class AIProcessor:
                         u.get("completion_tokens", 0))
                     self.usage["total_tokens"] += int(u.get("total_tokens", 0))
                 return self._parse_json(content)
-            except Exception as e:  # noqa: BLE001
+            except requests.RequestException as e:
                 last = e
-                time.sleep(2)  # 重试前短暂退避，缓解瞬时限流
+                response = getattr(e, "response", None)
+                status = response.status_code if response is not None else None
+                if status is not None and status not in {408, 409, 425, 429, 500, 502, 503, 504}:
+                    break
+                if attempt < attempts - 1:
+                    retry_after = ""
+                    if response is not None:
+                        retry_after = response.headers.get("Retry-After", "")
+                    try:
+                        delay = float(retry_after)
+                    except (TypeError, ValueError):
+                        delay = min(20, 2 ** attempt)
+                    time.sleep(max(0.2, min(delay, 60)))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
+                # A malformed model response is deterministic for this request;
+                # retrying it only increases cost and delays the local fallback.
+                last = e
+                break
         raise RuntimeError(f"AI 调用失败: {last}")
 
     def get_usage(self) -> dict:
@@ -149,7 +167,16 @@ class AIProcessor:
                 res_map = {int(r.get("index", -1)): r
                            for r in data.get("items", [])}
                 for i, it in enumerate(batch):
-                    r = res_map.get(i, {})
+                    r = res_map.get(i)
+                    if r is None:
+                        # Partial model responses are common near token limits.
+                        # Preserve the local classification and score instead of
+                        # silently demoting the item to ``other`` with score 0.
+                        it.keep = True
+                        it.cn_summary = it.cn_summary or nlp_local.summarize(
+                            it.summary or it.full_text)
+                        local.append(it)
+                        continue
                     if r.get("keep", True) is False:
                         it.keep = False
                         continue
