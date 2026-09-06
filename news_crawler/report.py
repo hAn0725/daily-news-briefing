@@ -1,9 +1,11 @@
-"""报告生成：邮件 PDF 日报与本地护眼 HTML 备份。"""
+"""报告生成：护眼 HTML，以及由浏览器直接打印该 HTML 得到的 PDF。"""
 import html
-import os
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
-from xml.sax.saxutils import escape as xml_escape
 
 CAT_META = {
     "finance": {"icon": "📈", "sub": "行情 · 持仓板块 · 宏观政策"},
@@ -49,6 +51,13 @@ h2.section .icon { margin-right:6px; }
 .footer { margin-top:34px; padding-top:14px; border-top:1px solid #2b2f37;
           color:#5f646d; font-size:11px; text-align:center; }
 .empty { color:#5f646d; font-size:13px; padding:8px 0 20px; }
+@page { size:A4; margin:10mm 9mm; }
+@media print {
+  html, body { background:#171a1f !important; }
+  body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .page { max-width:none; padding:0; }
+  .footer { display:none; }
+}
 """
 
 
@@ -192,8 +201,7 @@ def generate_report(config, date_str, grouped, summary, market, out_dir,
     pdf_cfg = config.report.get("pdf", {}) or {}
     if pdf_cfg.get("enabled", True):
         pdf_path = month_dir / f"{date_str}.pdf"
-        generate_pdf_report(config, date_str, grouped, summary, market,
-                            pdf_path, ai_usage=ai_usage, ai_cost=ai_cost)
+        generate_pdf_from_html(html_path, pdf_path)
         paths.append(pdf_path)
     if not pdf_cfg.get("keep_html", True):
         html_path.unlink(missing_ok=True)
@@ -201,197 +209,173 @@ def generate_report(config, date_str, grouped, summary, market, out_dir,
     return paths
 
 
-def _pdf_text(value) -> str:
-    """Escape text for ReportLab's Paragraph markup without losing line breaks."""
-    return xml_escape(_clean_text(value)).replace("\n", "<br/>")
+def _find_browser() -> Path:
+    """Return a Chromium browser that supports headless PDF printing."""
+    candidates = [
+        Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
+        Path("C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
+        Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+        Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
+    ]
+    for name in (
+            "chrome", "google-chrome", "chromium", "chromium-browser",
+            "msedge"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(Path(found))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "无法生成 PDF：未找到 Chrome、Edge 或 Chromium 浏览器。")
 
 
-_PDF_FONT_NAME = None
+def generate_pdf_from_html(html_path, pdf_path, browser_path=None):
+    """Capture the HTML as a long image and paginate it into an A4 PDF."""
+    html_path = Path(html_path).resolve()
+    pdf_path = Path(pdf_path).resolve()
+    if not html_path.is_file():
+        raise FileNotFoundError(html_path)
+    browser = Path(browser_path).resolve() if browser_path else _find_browser()
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="news-pdf-browser-") as folder:
+        folder_path = Path(folder)
+        screenshot_path = _capture_long_screenshot(
+            browser, html_path, folder_path)
+        rendered_pdf = folder_path / "rendered.pdf"
+        _image_to_paginated_pdf(screenshot_path, rendered_pdf, html_path.stem)
+        if (rendered_pdf.stat().st_size < 1000 or
+                not rendered_pdf.read_bytes().startswith(b"%PDF-")):
+            raise RuntimeError(f"图片分页生成的 PDF 无效：{rendered_pdf}")
+        shutil.copy2(rendered_pdf, pdf_path)
 
 
-def _register_pdf_font() -> str:
-    """Prefer an embedded Windows CJK font; fall back to a standard CID font."""
-    global _PDF_FONT_NAME
-    if _PDF_FONT_NAME:
-        return _PDF_FONT_NAME
+def _capture_long_screenshot(browser: Path, html_path: Path,
+                             folder: Path) -> Path:
+    """Capture the complete report, growing the viewport if necessary."""
+    try:
+        from PIL import Image, ImageChops
+    except ImportError as exc:
+        raise RuntimeError("缺少图片型 PDF 依赖，请运行 pip install -r requirements.txt") from exc
 
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    from reportlab.pdfbase.ttfonts import TTFont
+    scale = 2
+    screenshot_path = folder / "report.png"
+    for viewport_height in (8000, 12000, 16000):
+        screenshot_path.unlink(missing_ok=True)
+        profile = folder / f"profile-{viewport_height}"
+        command = [
+            str(browser),
+            "--headless=new",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--force-device-scale-factor={scale}",
+            f"--user-data-dir={profile}",
+            f"--window-size=900,{viewport_height}",
+            f"--screenshot={screenshot_path}",
+            html_path.as_uri(),
+        ]
+        result = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120, check=False)
+        if result.returncode != 0 or not screenshot_path.is_file():
+            detail = (result.stderr or result.stdout or "未知错误").strip()
+            raise RuntimeError(
+                f"浏览器截取 HTML 长图失败（退出码 {result.returncode}）："
+                f"{detail}")
 
-    fonts_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
-    for filename in ("msyh.ttc", "simsun.ttc", "simhei.ttf"):
-        font_path = fonts_dir / filename
-        if not font_path.is_file():
-            continue
-        try:
-            pdfmetrics.registerFont(
-                TTFont("NewsCJK", str(font_path), subfontIndex=0))
-            _PDF_FONT_NAME = "NewsCJK"
-            return _PDF_FONT_NAME
-        except Exception:  # noqa: BLE001
-            continue
+        with Image.open(screenshot_path) as source:
+            image = source.convert("RGB")
+            background = Image.new("RGB", image.size, (23, 26, 31))
+            bbox = ImageChops.difference(image, background).getbbox()
+            if bbox is None:
+                raise RuntimeError("浏览器截图为空，未检测到日报内容")
+            content_bottom = min(image.height, bbox[3] + 80 * scale)
+            if content_bottom < image.height - 100 * scale:
+                cropped = image.crop((0, 0, image.width, content_bottom))
+                cropped.save(screenshot_path, format="PNG", optimize=True)
+                return screenshot_path
 
-    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-    _PDF_FONT_NAME = "STSong-Light"
-    return _PDF_FONT_NAME
-
-
-def _pdf_styles(font_name: str):
-    """Build a small, self-contained Chinese PDF style system."""
-    from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    base = getSampleStyleSheet()
-    return {
-        "title": ParagraphStyle("NewsTitle", parent=base["Title"],
-                                fontName=font_name, fontSize=19,
-                                leading=27, textColor=colors.HexColor("#1f2937"),
-                                spaceAfter=5),
-        "meta": ParagraphStyle("NewsMeta", parent=base["Normal"],
-                               fontName=font_name, fontSize=8.5, leading=13,
-                               textColor=colors.HexColor("#64748b")),
-        "section": ParagraphStyle("NewsSection", parent=base["Heading2"],
-                                  fontName=font_name, fontSize=14,
-                                  leading=20, textColor=colors.HexColor("#1e3a5f"),
-                                  spaceBefore=15, spaceAfter=5),
-        "item_title": ParagraphStyle("NewsItemTitle", parent=base["Heading3"],
-                                     fontName=font_name, fontSize=11.5,
-                                     leading=16, textColor=colors.HexColor("#1f2937"),
-                                     spaceAfter=4),
-        "body": ParagraphStyle("NewsBody", parent=base["BodyText"],
-                               fontName=font_name, fontSize=9.5, leading=15,
-                               textColor=colors.HexColor("#334155"),
-                               spaceAfter=5),
-        "small": ParagraphStyle("NewsSmall", parent=base["Normal"],
-                                fontName=font_name, fontSize=8, leading=11,
-                                textColor=colors.HexColor("#64748b")),
-        "summary": ParagraphStyle("NewsSummary", parent=base["BodyText"],
-                                  fontName=font_name, fontSize=10,
-                                  leading=16, textColor=colors.HexColor("#1f2937"),
-                                  borderColor=colors.HexColor("#93b4cf"),
-                                  borderWidth=0.8, borderPadding=10,
-                                  backColor=colors.HexColor("#f3f7fa"),
-                                  spaceBefore=8, spaceAfter=10),
-        "center": ParagraphStyle("NewsCenter", parent=base["Normal"],
-                                 fontName=font_name, fontSize=8, leading=11,
-                                 alignment=TA_CENTER,
-                                 textColor=colors.HexColor("#64748b")),
-    }
+    raise RuntimeError("HTML 内容超过截图上限，请减少单日新闻条数")
 
 
-def _pdf_footer(canvas, doc):
-    from reportlab.lib import colors
+def _find_page_cut(image, start: int, target: int,
+                   background=(23, 26, 31)) -> int:
+    """Move a page cut upward to the nearest gap between report cards."""
+    pixels = image.load()
+    width = image.width
+    lower = start + int((target - start) * 0.65)
+    min_blank_run = max(8, width // 180)
 
-    font_name = _register_pdf_font()
-    canvas.saveState()
-    canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
-    canvas.line(doc.leftMargin, 30, doc.pagesize[0] - doc.rightMargin, 30)
-    canvas.setFillColor(colors.HexColor("#64748b"))
-    canvas.setFont(font_name, 8)
-    canvas.drawString(doc.leftMargin, 18, "每日新闻简报")
-    canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, 18,
-                           f"第 {doc.page} 页")
-    canvas.restoreState()
+    def row_is_blank(y):
+        for x in range(0, width, 8):
+            pixel = pixels[x, y]
+            if any(abs(pixel[i] - background[i]) > 3 for i in range(3)):
+                return False
+        return True
+
+    run_end = None
+    for y in range(target - 1, lower - 1, -1):
+        if row_is_blank(y):
+            if run_end is None:
+                run_end = y
+        elif run_end is not None:
+            run_start = y + 1
+            if run_end - run_start + 1 >= min_blank_run:
+                return (run_start + run_end) // 2
+            run_end = None
+    return target
+
+
+def _image_to_paginated_pdf(screenshot_path: Path, pdf_path: Path,
+                            title: str):
+    """Slice a long screenshot at visual gaps and place slices on A4 pages."""
+    try:
+        import pymupdf
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("缺少图片型 PDF 依赖，请运行 pip install -r requirements.txt") from exc
+
+    with Image.open(screenshot_path) as source:
+        image = source.convert("RGB")
+    page_height = round(image.width * 297 / 210)
+    slices = []
+    start = 0
+    while image.height - start > page_height:
+        target = start + page_height
+        cut = _find_page_cut(image, start, target)
+        slices.append((start, cut))
+        start = cut
+    slices.append((start, image.height))
+
+    document = pymupdf.open()
+    try:
+        for top, bottom in slices:
+            page_image = Image.new(
+                "RGB", (image.width, page_height), (23, 26, 31))
+            segment = image.crop((0, top, image.width, bottom))
+            page_image.paste(segment, (0, 0))
+            buffer = BytesIO()
+            page_image.save(buffer, format="PNG", optimize=True)
+            page = document.new_page(width=595.28, height=841.89)
+            page.insert_image(page.rect, stream=buffer.getvalue())
+        document.set_metadata({"title": f"每日新闻简报 {title}"})
+        document.save(pdf_path, garbage=4, deflate=True)
+    finally:
+        document.close()
 
 
 def generate_pdf_report(config, date_str, grouped, summary, market, pdf_path,
                         ai_usage=None, ai_cost=0.0):
-    """Create the PDF sent by email; HTML remains an optional local backup."""
-    try:
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.units import mm
-        from reportlab.platypus import (
-            KeepTogether,
-            Paragraph,
-            SimpleDocTemplate,
-            Spacer,
-            Table,
-            TableStyle,
-        )
-    except ImportError as exc:
-        raise RuntimeError("缺少 PDF 依赖，请运行 pip install -r requirements.txt") from exc
-
-    font_name = _register_pdf_font()
-    styles = _pdf_styles(font_name)
-    doc = SimpleDocTemplate(str(pdf_path), pagesize=A4,
-                            leftMargin=17 * mm, rightMargin=17 * mm,
-                            topMargin=16 * mm, bottomMargin=18 * mm,
-                            title=f"每日新闻简报 {date_str}",
-                            author="news_crawler")
-    story = [
-        Paragraph("DAILY NEWS BRIEFING", styles["meta"]),
-        Paragraph(f"每日新闻简报 - {date_str}", styles["title"]),
-        Paragraph(f"生成时间 {datetime.now().strftime('%Y-%m-%d %H:%M')} | "
-                  "按关注领域自动整理", styles["meta"]),
-        Spacer(1, 8),
-    ]
-    if market:
-        story.append(Paragraph("财经数据速览", styles["section"]))
-        data = [["名称", "最新", "涨跌", "涨跌幅"]]
-        for item in market:
-            pct = item.get("change_pct")
-            chg = item.get("change")
-            data.append([
-                _pdf_text(item.get("name")),
-                _pdf_text(item.get("price")),
-                "-" if chg is None else f"{chg:+.2f}",
-                "-" if pct is None else f"{pct:+.2f}%",
-            ])
-        table = Table(data, colWidths=[50 * mm, 34 * mm, 32 * mm, 32 * mm],
-                      repeatRows=1)
-        table.setStyle(TableStyle([
-            ("FONTNAME", (0, 0), (-1, -1), font_name),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-            ("LEADING", (0, 0), (-1, -1), 12),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e6eef5")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
-            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
-            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.extend([table, Spacer(1, 4)])
-    if summary:
-        story.extend([
-            Paragraph("今日要闻综述", styles["section"]),
-            Paragraph(_pdf_text(summary), styles["summary"]),
-        ])
-
-    for cat, cfg in config.categories.items():
-        items = grouped.get(cat, [])
-        title = _pdf_text(cfg.get("title", cat))
-        story.append(Paragraph(f"{title}（{len(items)} 条）", styles["section"]))
-        if not items:
-            story.append(Paragraph("今日暂无该分类新闻。", styles["body"]))
-            continue
-        for item in items:
-            block = [Paragraph(_pdf_text(item.display_title),
-                               styles["item_title"])]
-            if item.en_original:
-                block.append(Paragraph(_pdf_text(item.en_original),
-                                       styles["small"]))
-            block.append(Paragraph(_pdf_text(item.cn_summary), styles["body"]))
-            meta = f"来源：{_pdf_text(item.source)}"
-            if item.published:
-                meta += f" | {item.published.strftime('%m-%d %H:%M')}"
-            if item.score:
-                meta += f" | 相关度：{item.score}/5"
-            url = html.escape(item.url, quote=True)
-            meta += f' | <link href="{url}">原文链接</link>'
-            block.extend([Paragraph(meta, styles["small"]), Spacer(1, 5)])
-            story.append(KeepTogether(block))
-
-    total = sum(len(v) for v in grouped.values())
-    usage = "本次未使用 AI（本地模式）"
-    if ai_usage:
-        usage = (f"本次 AI 用量 {ai_usage['total_tokens']} tokens，"
-                 f"估算费用 ¥{ai_cost:.2f}")
-    story.extend([
-        Spacer(1, 8),
-        Paragraph(f"共 {total} 条新闻 | 覆盖 {len(config.sources)} 个新闻源 | {usage}",
-                  styles["center"]),
-    ])
-    doc.build(story, onFirstPage=_pdf_footer, onLaterPages=_pdf_footer)
+    """Compatibility wrapper that also uses HTML as the sole PDF source."""
+    html_str = build_html(config, date_str, grouped, summary, market,
+                          ai_usage=ai_usage, ai_cost=ai_cost)
+    pdf_path = Path(pdf_path)
+    temp_root = Path(__file__).resolve().parents[1] / "tmp" / "pdfs"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="report-", dir=temp_root) as folder:
+        html_path = Path(folder) / f"{date_str}.html"
+        html_path.write_text(html_str, encoding="utf-8")
+        generate_pdf_from_html(html_path, pdf_path)

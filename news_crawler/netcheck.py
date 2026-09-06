@@ -1,8 +1,7 @@
 """联网检测与等待：确认 VPN 已开启、能访问外网后才允许生成。
 
-- check_online(): 依次尝试「配置代理 → 直连」访问若干国外探针地址，
-  任一成功即视为已联通外网（未开 VPN 时这些地址通常无法访问，
-  因此可以准确判断"梯子是否打开"）。
+- check_online(): 配置了代理时只允许通过该代理访问国外探针，绝不回退直连；
+  未配置代理时才用直连检测 TUN 模式 VPN。
 - wait_until_ready(): 计划任务专用等待循环——
   * 未联网：每隔 N 分钟（默认 5 分钟）重试一次，直到当天截止时间（默认 23:00）；
   * 已联网但处于高峰时段：睡到空闲时段边界再继续（生成只发生在空闲时段）；
@@ -17,26 +16,35 @@ import requests
 
 log = logging.getLogger("news")
 
-# 默认探针：中国大陆无法直连的地址，连通即说明 VPN 生效
+# 默认探针必须是在中国大陆通常无法直连、且成功时明确返回 204 的地址。
+# Cloudflare 在大陆可直连，不能用于判断 VPN 是否开启。
 DEFAULT_CHECK_URLS = [
     "https://www.google.com/generate_204",
-    "https://cp.cloudflare.com/generate_204",
 ]
 
 _UA = {"User-Agent": "Mozilla/5.0 (news-netcheck)"}
 
 
 def check_online(config, quiet=False):
-    """检测能否访问外网（走配置代理或直连，任一路径成功即通过）"""
+    """检测 VPN/外网是否可用。
+
+    一旦配置 ``network.proxy``，该地址就是唯一允许的检测路径。此前的
+    “代理失败后直连 Cloudflare”会把普通国内网络误判成 VPN，进而发送
+    缺少全部海外源的残缺日报。
+    """
     net = config.network or {}
     timeout = float(net.get("check_timeout", 6))
     urls = net.get("check_urls") or DEFAULT_CHECK_URLS
     proxy = (net.get("proxy") or "").strip()
+    expected_statuses = {
+        int(status) for status in (net.get("check_statuses") or [204])
+    }
 
-    attempts = []
     if proxy:
-        attempts.append(("代理", {"http": proxy, "https": proxy}))
-    attempts.append(("直连", None))  # 覆盖 TUN 模式 VPN / 直连场景
+        attempts = [("代理", {"http": proxy, "https": proxy})]
+    else:
+        # 只有未配置本地代理时，才用这条路径覆盖 TUN 模式 VPN。
+        attempts = [("直连（TUN）", None)]
 
     for label, proxies in attempts:
         for url in urls:
@@ -48,7 +56,7 @@ def check_online(config, quiet=False):
                     with requests.Session() as s:
                         s.trust_env = False  # 忽略系统/环境代理，真正直连测试
                         r = s.get(url, timeout=timeout, headers=_UA)
-                if r.status_code < 500:
+                if r.status_code in expected_statuses:
                     if not quiet:
                         log.info("联网检测通过（%s %s → HTTP %d）",
                                  label, url, r.status_code)
@@ -56,6 +64,30 @@ def check_online(config, quiet=False):
             except Exception:  # noqa: BLE001
                 continue
     return False
+
+
+def foreign_coverage(config, sources, items):
+    """返回海外新闻覆盖是否达到发送日报的最低要求及统计值。"""
+    net = config.network or {}
+    if not net.get("require_foreign_news", True):
+        return True, 0, 0
+
+    foreign_source_names = {
+        source.name for source in sources
+        if source.language == "en" or source.via_proxy
+    }
+    if not foreign_source_names:
+        return True, 0, 0
+
+    foreign_items = [
+        item for item in items if item.source in foreign_source_names
+    ]
+    present_sources = {item.source for item in foreign_items}
+    min_sources = max(1, int(net.get("min_foreign_sources", 1)))
+    min_items = max(1, int(net.get("min_foreign_items", 1)))
+    ok = (len(present_sources) >= min_sources and
+          len(foreign_items) >= min_items)
+    return ok, len(present_sources), len(foreign_items)
 
 
 def _parse_hhmm(text, default):
@@ -94,26 +126,28 @@ def wait_until_ready(config, log):
     dh, dm = _parse_hhmm(sched.get("deadline", "23:00"), (23, 0))
     peak_periods = sched.get("peak_periods") or []
 
-    log.info("联网检测开启：未联网每 %d 分钟重试一次，当天 %02d:%02d 截止；"
-             "仅空闲时段生成", interval_min, dh, dm)
+    peak_note = "；已启用禁用时段" if peak_periods else ""
+    log.info("联网检测开启：未联网每 %d 分钟重试一次，当天 %02d:%02d 截止%s",
+             interval_min, dh, dm, peak_note)
     while True:
         now = datetime.now(tz)
         deadline = now.replace(hour=dh, minute=dm, second=0, microsecond=0)
         remain = (deadline - now).total_seconds()
         if remain <= 0:
-            log.error("已达今日截止时间 %02d:%02d 仍未满足联网+空闲条件，"
+            log.error("已达今日截止时间 %02d:%02d 仍未满足运行条件，"
                       "今天不再生成（明早计划任务会自动再试）。", dh, dm)
             return False
 
         peak, peak_end_min = _in_peak(now, peak_periods)
         if peak:
-            # 高峰时段肯定不生成，直接睡到空闲边界，期间不探测外网（省时省流量）
+            # 分段等待而不是一次睡数小时，避免隐藏任务长时间无活动而被系统清理。
             now_min = now.hour * 60 + now.minute
-            wait_s = min(peak_end_min * 60 - now_min * 60 - now.second, remain)
-            log.info("当前为高峰时段（工作日 09:00-12:00 / 14:00-18:00），"
-                     "%.0f 分钟后进入空闲时段再检测", wait_s / 60)
+            until_peak_end = peak_end_min * 60 - now_min * 60 - now.second
+            wait_s = min(interval_min * 60, until_peak_end, remain)
+            log.info("当前处于配置的禁用时段，暂不生成；%.0f 分钟后再次检查",
+                     wait_s / 60)
         elif check_online(config):
-            log.info("联网检测通过（VPN/外网可用），且处于空闲时段，开始生成。")
+            log.info("联网检测通过（VPN/外网可用），开始生成。")
             return True
         else:
             wait_s = min(interval_min * 60, remain)

@@ -10,9 +10,19 @@ cd /d "%~dp0"
 if not exist "logs" mkdir logs
 
 set "PY="
-if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if exist "%~dp0.runtime\Scripts\python.exe" (
+    "%~dp0.runtime\Scripts\python.exe" --version >nul 2>nul
+    if not errorlevel 1 set "PY=%~dp0.runtime\Scripts\python.exe"
+)
+if not defined PY if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" --version >nul 2>nul
+    if not errorlevel 1 set "PY=%~dp0.venv\Scripts\python.exe"
+)
 rem 优先使用已知可用的完整路径
-if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" --version >nul 2>nul
+    if not errorlevel 1 set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+)
 if not defined PY where py >nul 2>nul && set "PY=py -3"
 if not defined PY (
     rem 兜底：从 PATH 里找一个真正能执行的 python（跳过商店占位程序）

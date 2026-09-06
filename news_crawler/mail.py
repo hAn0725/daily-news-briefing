@@ -31,10 +31,9 @@ def _deliver(host, port, use_ssl, msg, sender, to_addrs, password):
 
 
 def send_report_email(config, paths, date_str, summary="", cat_counts=None):
-    """发送 PDF 报告邮件；返回 (是否成功, 说明文字)。
+    """发送 PDF 和 HTML 双附件报告；返回 (是否成功, 说明文字)。
 
-    HTML 仅作为本地备份，邮件不再嵌入或附带 HTML，避免不同
-    邮件客户端的排版差异。
+    PDF 方便直接预览；HTML 保留原始排版、可复制文字和原文链接。
     """
     cfg = config.email or {}
     if not cfg.get("enabled", False):
@@ -58,6 +57,10 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
                     None)
     if pdf_path is None or not pdf_path.is_file():
         return False, "PDF 报告未生成，已跳过邮件发送"
+    html_path = next((Path(p) for p in paths if str(p).lower().endswith(".html")),
+                     None)
+    if html_path is None or not html_path.is_file():
+        return False, "HTML 报告未生成，已跳过邮件发送"
 
     # ---- 纯文本摘要部分 ----
     plain = [f"这是 {date_str} 的每日新闻简报（程序自动生成）。"]
@@ -66,7 +69,7 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
             f"{k} {v} 条" for k, v in cat_counts.items()))
     if summary:
         plain += ["", "—— 今日综述 ——", summary]
-    plain += ["", "完整日报请查看附件 PDF。"]
+    plain += ["", "邮件含 PDF 和 HTML 两个附件；HTML 阅读效果最佳。"]
     plain_text = "\n".join(plain)
 
     subject = f"{prefix}{date_str}"
@@ -78,10 +81,14 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
     msg["Date"] = formatdate(localtime=True)
 
     msg.attach(MIMEText(plain_text, "plain", "utf-8"))
-    att = MIMEApplication(pdf_path.read_bytes(), _subtype="pdf")
-    att.add_header("Content-Disposition", "attachment",
-                   filename=f"news_{date_str}.pdf")
-    msg.attach(att)
+    pdf_att = MIMEApplication(pdf_path.read_bytes(), _subtype="pdf")
+    pdf_att.add_header("Content-Disposition", "attachment",
+                       filename=f"news_{date_str}.pdf")
+    msg.attach(pdf_att)
+    html_att = MIMEText(html_path.read_text(encoding="utf-8"), "html", "utf-8")
+    html_att.add_header("Content-Disposition", "attachment",
+                        filename=f"news_{date_str}.html")
+    msg.attach(html_att)
 
     # 发送（带重试与端口回退）：实测网络偶发瞬断（Connection unexpectedly
     # closed），同一端口重试一次，465 失败再自动换 587 STARTTLS 兼一段

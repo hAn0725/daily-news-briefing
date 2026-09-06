@@ -1,7 +1,7 @@
 """主流程：等待联网 → 采集 → 过滤 → 去重 → 全文 → AI/本地处理 → 生成报告 → 发送邮件 → 清理
 
-计划任务模式（--wait-net）：生成前检测 VPN/外网，未通则每 5 分钟重试直到当天截止
-时间（默认 23:00），且只在空闲时段生成；生成后自动把报告发送到 QQ 邮箱。
+计划任务模式（--wait-net）：生成前严格检测配置的代理/VPN，未通则每 5 分钟重试
+直到当天截止时间（默认 23:00）；抓取后还会校验海外新闻覆盖，避免发送残缺日报。
 """
 import argparse
 import logging
@@ -30,7 +30,7 @@ from news_crawler.filter import filter_items  # noqa: E402
 from news_crawler.fulltext import fetch_full_text  # noqa: E402
 from news_crawler.mail import send_report_email  # noqa: E402
 from news_crawler.market import fetch_market_data  # noqa: E402
-from news_crawler.netcheck import wait_until_ready  # noqa: E402
+from news_crawler.netcheck import foreign_coverage, wait_until_ready  # noqa: E402
 from news_crawler.report import generate_report  # noqa: E402
 
 
@@ -63,8 +63,8 @@ def run(args):
     setup_logging(config, date_str)
     log = logging.getLogger("news")
 
-    # ---------- 0. 计划任务模式：等待 VPN/外网 + 空闲时段 ----------
-    # 未联网每 5 分钟重试、高峰时段自动延后，直到生成或当天截止；生成后不再检测。
+    # ---------- 0. 计划任务模式：等待 VPN/外网 ----------
+    # 未联网每 5 分钟重试，直到生成或当天截止；生成后不再检测。
     if args.wait_net and not wait_until_ready(config, log):
         return 2
 
@@ -104,6 +104,18 @@ def run(args):
               if (it.published is None or it.published >= cutoff)]
     recent = filter_items(recent, config)
     log.info("时间过滤+排除后剩 %d 条", len(recent))
+
+    # 第二道安全闸门：即使预检后 VPN 意外断开，也绝不生成或发送只有国内源的日报。
+    coverage_ok, foreign_sources, foreign_items = foreign_coverage(
+        config, sources, recent)
+    if not coverage_ok:
+        min_sources = int(config.network.get("min_foreign_sources", 1))
+        min_items = int(config.network.get("min_foreign_items", 1))
+        log.error(
+            "海外新闻覆盖不足（成功来源 %d/%d，新闻 %d/%d），"
+            "本次不生成、不发送；请开启 VPN 后重试。",
+            foreign_sources, min_sources, foreign_items, min_items)
+        return 3
 
     # ---------- 3. 去重 ----------
     items = dedup_items(recent)
@@ -193,6 +205,9 @@ def run(args):
             log.info("AI 用量: %s tokens，费用约 ¥%.4f",
                      ai_usage["total_tokens"], ai_cost)
         except Exception as e:  # noqa: BLE001
+            if config.ai_cfg.get("required", False):
+                log.error("AI 处理失败且已禁止本地降级，本次不生成、不发送: %s", e)
+                return 4
             log.error("AI 处理失败，回退本地: %s", e)
             items = _cross_dedup(nlp_local.fallback_process(items, config))
     else:

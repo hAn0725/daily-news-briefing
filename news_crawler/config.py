@@ -1,6 +1,7 @@
 """加载配置与环境变量"""
 import logging
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlparse
@@ -68,10 +69,14 @@ class Config:
             non_negative("report", key)
         positive("network", "request_timeout", 15)
         non_negative("network", "retries")
+        for key in ("min_foreign_sources", "min_foreign_items"):
+            positive("network", key)
         positive("ai", "timeout", 120)
         non_negative("ai", "max_retries")
-        for key in ("batch_size", "concurrency"):
+        for key in ("batch_size", "concurrency", "max_tokens",
+                    "retry_base_seconds"):
             positive("ai", key)
+        non_negative("ai", "min_request_interval_seconds")
         pdf_cfg = self.report.get("pdf", {}) or {}
         if not isinstance(pdf_cfg, Mapping):
             raise ConfigError("report.pdf 必须是 YAML 对象")
@@ -101,16 +106,22 @@ class Config:
                 raise ConfigError(f"sources[{i}].type 仅支持 rss 或 json")
 
     def _load_api_key(self) -> str:
-        """优先解密 .env 中的加密 Key（Windows DPAPI，绑定当前用户）；兼容旧明文"""
+        """按配置读取并优先解密 API Key（Windows DPAPI，绑定当前用户）。"""
         import base64
-        enc = os.getenv("DEEPSEEK_API_KEY_ENC", "").strip()
+        provider = str(self.ai_cfg.get("provider") or "deepseek").lower()
+        default_env = ("BIGMODEL_API_KEY" if provider == "bigmodel"
+                       else "DEEPSEEK_API_KEY")
+        env_name = str(self.ai_cfg.get("api_key_env") or default_env).strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", env_name):
+            raise ConfigError("ai.api_key_env 必须是合法的大写环境变量名")
+        enc = os.getenv(f"{env_name}_ENC", "").strip()
         if enc:
             try:
                 from .secure import unprotect
                 return unprotect(base64.b64decode(enc)).decode("utf-8").strip()
             except Exception as e:  # noqa: BLE001
                 log.warning("解密 API Key 失败（回退明文）: %s", e)
-        return os.getenv("DEEPSEEK_API_KEY", "").strip()
+        return os.getenv(env_name, "").strip()
 
     @property
     def smtp_password(self) -> str:

@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+.runtime/
 venv/
 
 # 生成产物

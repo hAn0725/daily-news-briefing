@@ -1,4 +1,4 @@
-"""DeepSeek AI 处理：批量摘要/翻译/分类/过滤 + 今日综述，失败自动回退"""
+"""兼容 OpenAI 协议的 AI 处理：摘要/翻译/分类/过滤/去重/综述。"""
 import json
 import logging
 import re
@@ -18,20 +18,28 @@ CATS = ("finance", "tech", "world")
 
 class AIProcessor:
     def __init__(self, config):
-        self.base = (config.ai_cfg.get("base_url", "https://api.deepseek.com")
+        self.base = (config.ai_cfg.get(
+            "base_url", "https://open.bigmodel.cn/api/paas/v4")
                      .rstrip("/"))
-        self.model = config.ai_cfg.get("model", "deepseek-v4-flash")
+        self.model = config.ai_cfg.get("model", "glm-4.7-flash")
         self.key = config.api_key
         self.timeout = int(config.ai_cfg.get("timeout", 120))
         self.retries = int(config.ai_cfg.get("max_retries", 3))
         self.batch = int(config.ai_cfg.get("batch_size", 15))
         self.concurrent = max(1, int(config.ai_cfg.get("concurrency", 4)))
+        self.required = bool(config.ai_cfg.get("required", False))
+        self.max_tokens = int(config.ai_cfg.get("max_tokens", 8192))
+        self.retry_base = float(config.ai_cfg.get("retry_base_seconds", 2))
+        self.min_request_interval = float(
+            config.ai_cfg.get("min_request_interval_seconds", 0))
         self.thinking = (config.ai_cfg.get("thinking") or "").strip()
         self.profile = config.profile
         self.pricing = config.ai_cfg.get("pricing", {}) or {}
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0,
                       "total_tokens": 0}
         self._usage_lock = threading.Lock()
+        self._request_lock = threading.Lock()
+        self._last_request_at = 0.0
         self.headers = {
             "Authorization": f"Bearer {self.key}",
             "Content-Type": "application/json",
@@ -46,7 +54,7 @@ class AIProcessor:
                 {"role": "user", "content": user},
             ],
             "temperature": 0.3,
-            "max_tokens": 8192,  # 预留充足输出空间，避免大批量响应被截断
+            "max_tokens": self.max_tokens,
             "response_format": {"type": "json_object"},
         }
         if self.thinking:
@@ -55,6 +63,12 @@ class AIProcessor:
         attempts = max(1, self.retries)
         for attempt in range(attempts):
             try:
+                with self._request_lock:
+                    since_last = time.monotonic() - self._last_request_at
+                    delay = self.min_request_interval - since_last
+                    if delay > 0:
+                        time.sleep(delay)
+                    self._last_request_at = time.monotonic()
                 r = requests.post(f"{self.base}/chat/completions",
                                   headers=self.headers, json=payload,
                                   timeout=self.timeout)
@@ -81,8 +95,8 @@ class AIProcessor:
                     try:
                         delay = float(retry_after)
                     except (TypeError, ValueError):
-                        delay = min(20, 2 ** attempt)
-                    time.sleep(max(0.2, min(delay, 60)))
+                        delay = self.retry_base * (2 ** attempt)
+                    time.sleep(max(1, min(delay, 120)))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
                 # A malformed model response is deterministic for this request;
                 # retrying it only increases cost and delays the local fallback.
@@ -196,6 +210,10 @@ class AIProcessor:
                         it.score = 0
                     local.append(it)
             except Exception as e:  # noqa: BLE001
+                if self.required:
+                    raise RuntimeError(
+                        f"第 {bi + 1} 批 AI 处理失败，已禁止本地降级"
+                    ) from e
                 log.warning("第 %d 批 AI 处理失败，本地兜底: %s", bi + 1, e)
                 for it in batch:
                     it.keep = True
@@ -206,9 +224,15 @@ class AIProcessor:
             with lock:
                 results[bi] = local
 
-        # 并发处理各批（DeepSeek 支持并发请求；结果按批次顺序合并，内容与串行完全一致）
-        with ThreadPoolExecutor(max_workers=self.concurrent) as ex:
-            list(ex.map(lambda t: _run_batch(t[0], t[1]), enumerate(batches)))
+        # 免费模型通常只允许很低的并发；required 模式按顺序处理，避免某批
+        # 被 429 后悄悄降级成本地结果。
+        if self.required or self.concurrent == 1:
+            for bi, batch in enumerate(batches):
+                _run_batch(bi, batch)
+        else:
+            with ThreadPoolExecutor(max_workers=self.concurrent) as ex:
+                list(ex.map(lambda t: _run_batch(t[0], t[1]),
+                            enumerate(batches)))
 
         processed = []
         for bi in range(len(batches)):
@@ -237,6 +261,8 @@ class AIProcessor:
         try:
             data = self._chat(system, json.dumps(brief, ensure_ascii=False))
         except Exception as e:  # noqa: BLE001
+            if self.required:
+                raise
             log.warning("AI 去重调用失败（跳过去重）: %s", e)
             return []
         groups = []
@@ -271,5 +297,7 @@ class AIProcessor:
             data = self._chat(system, "\n".join(brief))
             return (data.get("summary") or "").strip()
         except Exception as e:  # noqa: BLE001
+            if self.required:
+                raise
             log.warning("综述生成失败: %s", e)
             return "今日新闻较多，详见各分类。"

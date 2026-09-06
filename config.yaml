@@ -13,7 +13,7 @@ report:
   post_dedup_threshold: 0.5   # 本地模式/兜底时的摘要相似度去重阈值（AI 模式下用语义去重更准）
   pdf:
     enabled: true
-    keep_html: true       # HTML 作为本地备份，邮件仅发送 PDF
+    keep_html: true       # 邮件同时附加 HTML 和 PDF，必须保留 HTML
   categories:
     finance:
       title: "财经与股市"
@@ -25,21 +25,26 @@ report:
       title: "国际大事"
       max_items: 5
 
-# ---------- AI 设置（DeepSeek）----------
+# ---------- AI 设置（智谱 BigModel）----------
 ai:
   enabled: true                      # false 则完全走本地处理
-  base_url: "https://api.deepseek.com"
-  model: "deepseek-v4-flash"
-  batch_size: 25                     # 每批提交给 AI 的条数（控制成本与响应速度）
-  thinking: "disabled"               # 关闭 v4-flash 的推理以提速降本（deepseek-chat 时代遗留可选）
-  concurrency: 4                     # 并发提交的 AI 批次数量（加速，质量不变）
-  timeout: 120
-  max_retries: 3
-  # 计费单价（元/百万 tokens），用于估算本次生成费用；按官方 V4 定价【峰值 + 输入缓存未命中】取值（更保守）
-  # v4-flash: 输入峰值 $0.44 / 输出峰值 $1.32，汇率按 ¥7.2 折算；非峰值时段约为一半
+  required: true                     # GLM 失败时不允许混入本地摘要后继续发送
+  provider: "bigmodel"
+  api_key_env: "BIGMODEL_API_KEY"    # 密钥只放 .env，运行 tools/store_key.py 后会加密
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.7-flash"            # 智谱当前免费文本模型
+  batch_size: 40                     # 减少免费接口总请求数
+  thinking: "disabled"               # 新闻整理无需深度思考，减少延迟
+  concurrency: 1                     # 免费接口严格串行，避免并发 429
+  timeout: 180
+  max_tokens: 16384
+  max_retries: 6
+  retry_base_seconds: 10             # 429/服务繁忙时指数退避，最长单次 120 秒
+  min_request_interval_seconds: 2
+  # 免费模型单价为 0，页脚仍保留 token 用量统计
   pricing:
-    input_per_million: 3.2           # v4-flash 输入（缓存未命中）≈ ¥3.17/百万
-    output_per_million: 9.5          # v4-flash 输出 ≈ ¥9.50/百万
+    input_per_million: 0
+    output_per_million: 0
 
 # ---------- 网络设置 ----------
 network:
@@ -48,21 +53,22 @@ network:
   # 代理地址（梯子）。国外源（英文源）会自动走此代理，国内源直连。
   # 留空 = 直连（此时国外源可能无法访问）。
   proxy: "http://127.0.0.1:7892"
+  # VPN 预检：配置了 proxy 时只走该代理，绝不回退到国内可直连站点。
+  check_urls:
+    - "https://www.google.com/generate_204"
+  check_statuses: [204]
+  # 抓取后的第二道闸门；不达标时不生成、不发邮件，定时入口 5 分钟后重试。
+  require_foreign_news: true
+  min_foreign_sources: 3
+  min_foreign_items: 5
 
 # ---------- 定时与联网检测（计划任务 run_daily.bat / --wait-net 使用）----------
 schedule:
   timezone: "Asia/Shanghai"
   retry_interval_minutes: 5   # 未联网/VPN未开时，每隔多少分钟重试一次
   deadline: "23:00"           # 当天到此时间仍未联网则放弃，次日 07:00 计划任务再试
-  # 高峰时段定义：生成只发生在空闲时段（其余时间均为空闲）
-  # days: 0=周一 … 6=周日
-  peak_periods:
-    - days: [0, 1, 2, 3, 4]
-      start: "09:00"
-      end: "12:00"
-    - days: [0, 1, 2, 3, 4]
-      start: "14:00"
-      end: "18:00"
+  # 已改用免费的 GLM-4.7-Flash，不再为 AI 峰值价格延后整份日报。
+  peak_periods: []
 
 # ---------- 邮件发送（QQ 邮箱）----------
 # 授权码不写在这里！先在 QQ 邮箱网页版开启 SMTP 服务拿到授权码，
@@ -75,7 +81,7 @@ email:
   #   SMTP_FROM_ADDR=你的QQ邮箱        （发件邮箱，须与授权码所属账号一致）
   #   SMTP_TO_ADDRS=收件邮箱            （多个用英文逗号分隔；留空则发给自己）
   subject_prefix: "【每日新闻简报】"
-  # 邮件始终发送 PDF 附件；HTML 只作为 report.pdf.keep_html 控制的本地备份
+  # 邮件同时发送 PDF 和 HTML 附件；HTML 保留最佳样式与可点击链接
 
 # ---------- 用户画像（AI 据此筛选与加权，可随时调整）----------
 user_profile:

@@ -14,9 +14,11 @@ class _DATA_BLOB(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
 
 
-def _to_blob(data: bytes) -> _DATA_BLOB:
+def _to_blob(data: bytes) -> tuple[_DATA_BLOB, ctypes.Array]:
+    """Build a DATA_BLOB and keep its backing buffer alive for the API call."""
     buf = ctypes.create_string_buffer(data or b"\0", len(data) or 1)
-    return _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    blob = _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    return blob, buf
 
 
 def _from_blob(blob: _DATA_BLOB) -> bytes:
@@ -27,7 +29,7 @@ def protect(data: bytes) -> bytes:
     """用当前用户凭据加密，返回密文（仅本用户本机可解）"""
     if not data:
         return b""
-    blob_in = _to_blob(data)
+    blob_in, _input_buffer = _to_blob(data)
     blob_out = _DATA_BLOB()
     if not ctypes.windll.crypt32.CryptProtectData(
             ctypes.byref(blob_in), None, None, None, None,
@@ -43,7 +45,7 @@ def unprotect(blob: bytes) -> bytes:
     """解密 protect() 生成的密文"""
     if not blob:
         return b""
-    blob_in = _to_blob(blob)
+    blob_in, _input_buffer = _to_blob(blob)
     blob_out = _DATA_BLOB()
     if not ctypes.windll.crypt32.CryptUnprotectData(
             ctypes.byref(blob_in), None, None, None, None,
