@@ -12,7 +12,7 @@
 - 🧠 **个性化**：按你的画像（光电专业 + 股民）加权筛选，聚焦半导体/AI/新能源/军工等持仓板块
 - 🛡️ **AI 完整性保护**：GLM 任一批次失败时不生成、不发送，定时任务稍后重试，避免混入本地降级摘要
 - 🗂️ 按月归档，自动清理 N 天前的旧报告
-- 📬 **定时 + 邮件**：每天 07:00 自动运行；配置了代理时必须由该代理通过 VPN 检测，不通则每 5 分钟重试至 23:00；海外源覆盖不足时绝不发送残缺日报
+- 📬 **可靠定时 + 邮件**：每天 07:00 自动运行，睡眠/关机错过后自动补跑；隐藏启动器同步等待并把真实退出码返回计划任务，启动、结束和异常都有独立日志
 - 💰 **免费 AI**：报告页脚保留 token 用量统计，GLM-4.7-Flash 的估算费用为 ¥0
 
 ## 快速开始
@@ -23,7 +23,7 @@
 # 首次安装：建立项目专用环境并安装依赖
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-# 生成 PDF 不需额外 Python 库，但本机需有 Chrome、Edge 或 Chromium
+# requirements.txt 已包含 PDF 依赖；本机还需有 Chrome、Edge 或 Chromium
 ```
 
 ### 2. 配置
@@ -59,25 +59,23 @@ python -m news_crawler.main --wait-net           # 先检测 VPN/外网再生成
 
 ### 4. 定时生成 + 邮箱发送（默认启用）
 
-**流程**：每天 **07:00** 计划任务启动 → 严格检测配置的代理/VPN（**不通则每 5 分钟重试，当天 23:00 截止**）→ 抓取后校验海外来源覆盖 → GLM 串行处理 → 生成 PDF → 发送到 QQ 邮箱。海外覆盖不足或 GLM 临时限流时不生成、不发送，并在 5 分钟后重试。AI 已使用免费 GLM 模型，因此不再按计费高峰延后日报。
+**流程**：每天 **07:00** 计划任务启动 → 严格检测配置的代理/VPN（**不通则每 5 分钟重试，当天 23:00 截止**）→ 抓取后校验海外来源覆盖 → GLM 串行处理 → 生成 PDF → 发送到 QQ 邮箱。海外覆盖不足或 GLM 临时限流时不生成、不发送，并在 5 分钟后重试。隐藏启动器会一直等待整个流程结束，将真实退出码交给 Windows；任务最长运行至 23:30，防止异常进程跨天占用任务实例。
 
 **首次配置邮箱（必须一次）**：
 1. QQ 邮箱网页版 → 设置 → 账户 → **POP3/SMTP 服务 → 开启**并生成**授权码**（16 位纯字母数字，不是 QQ 密码）；
 2. 终端运行 `python tools/store_smtp.py`，粘贴授权码（不回显，自动加密存入 `.env` 并验证登录）；首次运行会顺带输入 QQ 邮箱地址，存在本地 `.env`，**不进公开仓库**；
 3. 收件邮箱在 `.env` 的 `SMTP_TO_ADDRS` 配置（多个用英文逗号分隔，留空则发给自己）。
 
-**注册/更新定时任务**：双击 `install_task.bat`（任务名 `DailyNewsReport`，错过 07:00 会在开机/唤醒后补跑），或命令行：
-
-```bat
-schtasks /Create /TN "DailyNewsReport" /TR "wscript.exe \"%~dp0run_scheduled.vbs\"" /SC DAILY /ST 07:00 /F
-```
+**注册/更新定时任务**：右键 `install_task.bat` 并选择“以管理员身份运行”（任务名 `DailyNewsReport`，错过 07:00 会在开机/唤醒后补跑）。更新代码后也应重新运行一次，使最新可靠性设置写入 Windows。
 
 常用命令：
 ```bat
 schtasks /Run /TN DailyNewsReport        # 立即运行一次
-schtasks /Query /TN DailyNewsReport      # 查看任务
+schtasks /Query /TN DailyNewsReport /V /FO LIST  # 查看真实退出码和下次运行时间
 schtasks /Delete /TN DailyNewsReport /F  # 删除任务
 ```
+
+日志分为两层：`logs\scheduler.log` 记录隐藏启动器的启动时间、结束时间和真实退出码；`logs\run.log` 与 `logs\report_YYYY-MM-DD.log` 记录 Python 选择、联网等待、抓取、生成及邮件发送详情。任务返回码 `0` 表示完整流程成功；`2` 表示等待条件超时，`3` 表示海外覆盖不足，`4` 表示必需的 AI 处理失败，`5` 表示报告已生成但邮件发送失败，`100` 表示隐藏启动器未能启动批处理。
 
 ## 项目结构
 
@@ -100,10 +98,10 @@ d:\新闻news\
 │   ├── cleanup.py       # 清理过期报告
 │   └── main.py          # 主流程
 ├── output\2026-08\      # 生成的 PDF/HTML 报告（按月归档）
-├── logs\                # 运行日志
+├── logs\                # 调度器、批处理和日报运行日志
 ├── run_now.bat          # ★ 一键生成并发送邮箱（桌面快捷方式指向这里）
 ├── run_daily.bat        # 定时任务入口（07:00，含联网检测等待）
-├── run_scheduled.vbs    # 计划任务隐藏启动器（避免黑框常驻）
+├── run_scheduled.vbs    # 同步等待、回传退出码的隐藏启动器
 ├── install_task.bat     # 注册每天 07:00 的定时任务
 ├── assets\news.ico      # 应用图标
 └── tools\
@@ -130,7 +128,9 @@ d:\新闻news\
 - **想换 AI 服务商？** `ai.py` 兼容 OpenAI 接口格式，改 `config.yaml` 的 `base_url`、`model` 和 `api_key_env` 即可。
 - **报告想更简洁/更详细？** 调整 `config.yaml` 的 `report.categories.*.max_items`（条数）或 `user_profile.item_summary_chars`（单条摘要字数）。
 - **去重太松/太紧？** AI 模式下调整去重提示（`ai.py` 的 `find_duplicates`）；本地模式调整 `report.post_dedup_threshold`。
-- **没收到邮件？** 看 `logs\report_当天.log` 里的「邮件发送」记录；确认已开启 QQ 邮箱 SMTP 服务、已运行 `tools/store_smtp.py` 录入授权码，并翻一下垃圾箱。
+- **任务显示成功但没收到邮件？** 先看 `logs\scheduler.log` 是否有对应日期的 `START`/`END`，再看 `logs\run.log` 和 `logs\report_当天.log`。新版启动器会把真实退出码返回 Windows，不再把“仅启动了 wscript”误报为完整成功。
+- **07:00 没运行？** 若电脑当时睡眠或关机，任务会在唤醒/登录后补跑；用 `schtasks /Query /TN DailyNewsReport /V /FO LIST` 核对 `Last Run Time`、`Last Result` 和 `Next Run Time`。
+- **生成成功但没收到邮件？** 查看当日日志里的「邮件发送」记录；确认已开启 QQ 邮箱 SMTP 服务、已运行 `tools/store_smtp.py` 录入授权码，并检查垃圾箱。
 
 ## 安全说明
 

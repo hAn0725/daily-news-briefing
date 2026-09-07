@@ -238,7 +238,8 @@ def run(args):
     for p in paths:
         log.info("已生成: %s", p)
 
-    # ---------- 9. 发送邮件（失败不影响报告已保存）----------
+    # ---------- 9. 发送邮件（失败时保留报告，但返回非零状态）----------
+    exit_code = 0
     if args.no_mail:
         log.info("已跳过邮件发送（--no-mail）")
     else:
@@ -260,12 +261,17 @@ def run(args):
             if ok and pdf_path is not None:
                 mark_sent(state_path, date_str, fingerprint)
         (log.info if ok else log.error)("邮件发送: %s", msg)
+        if not ok:
+            exit_code = 5
 
     # ---------- 10. 清理旧报告 ----------
     keep_days = int(config.report.get("keep_days", 30))
     cleanup_old(out_dir, keep_days)
-    log.info("===== 完成 =====")
-    return 0
+    if exit_code:
+        log.error("===== 报告已生成，但发送未完成（退出码 %d）=====", exit_code)
+    else:
+        log.info("===== 完成 =====")
+    return exit_code
 
 
 def parse_args():

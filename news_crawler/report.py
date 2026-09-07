@@ -6,6 +6,7 @@ import tempfile
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 
 CAT_META = {
     "finance": {"icon": "📈", "sub": "行情 · 持仓板块 · 宏观政策"},
@@ -77,6 +78,18 @@ def _fmt_time(item):
     return ""
 
 
+def _safe_link(value) -> str:
+    """Allow only HTTP(S) links from untrusted feed content."""
+    link = _clean_text(value).strip()
+    try:
+        parsed = urlsplit(link)
+    except ValueError:
+        return "#"
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return "#"
+    return html.escape(link, quote=True)
+
+
 def _market_html(market) -> str:
     if not market:
         return ("<div class='empty'>财经数据暂不可用。</div>")
@@ -107,7 +120,7 @@ def _item_html(item) -> str:
     summary = _esc(item.cn_summary)
     source = _esc(item.source)
     ttime = _esc(_fmt_time(item))
-    link = html.escape(item.url, quote=True)
+    link = _safe_link(item.url)
     hot_tag = ""
     if item.score >= 5:
         hot_tag = "<span class='tag hot'>★ 重点</span>"
