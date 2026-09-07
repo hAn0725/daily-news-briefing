@@ -34,6 +34,73 @@ from news_crawler.netcheck import foreign_coverage, wait_until_ready  # noqa: E4
 from news_crawler.report import generate_report  # noqa: E402
 
 
+def apply_ai_duplicate_groups(items, groups, max_group_size=4,
+                              max_drop_ratio=0.30):
+    """Apply only conservative, auditable cross-source duplicate groups."""
+    accepted = []
+    used = set()
+    rejected = 0
+    for raw_group in groups:
+        group = []
+        for value in raw_group:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(items) and index not in group:
+                group.append(index)
+        categories = {
+            items[index].category for index in group
+            if items[index].category and items[index].category != "other"
+        }
+        sources = {items[index].source for index in group}
+        valid = (
+            2 <= len(group) <= max_group_size
+            and len(sources) == len(group)
+            and len(categories) <= 1
+            and not used.intersection(group)
+        )
+        if not valid:
+            rejected += 1
+            continue
+        accepted.append(group)
+        used.update(group)
+
+    drop = set()
+    for group in accepted:
+        best = max(group, key=lambda i: (items[i].score, -i))
+        drop.update(index for index in group if index != best)
+
+    drop_ratio = len(drop) / len(items) if items else 0
+    if drop_ratio > max_drop_ratio:
+        return items, {
+            "accepted": 0, "rejected": rejected + len(accepted),
+            "dropped": 0, "guarded": True, "proposed_ratio": drop_ratio,
+        }
+    return [item for index, item in enumerate(items) if index not in drop], {
+        "accepted": len(accepted), "rejected": rejected,
+        "dropped": len(drop), "guarded": False,
+        "proposed_ratio": drop_ratio,
+    }
+
+
+def select_diverse_items(items, limit, per_source_limit=3):
+    """Prefer source diversity, then backfill so diversity never reduces count."""
+    selected = []
+    deferred = []
+    source_counts = {}
+    for item in items:
+        count = source_counts.get(item.source, 0)
+        if count < per_source_limit:
+            selected.append(item)
+            source_counts[item.source] = count + 1
+        else:
+            deferred.append(item)
+    if len(selected) < limit:
+        selected.extend(deferred[:limit - len(selected)])
+    return selected[:limit]
+
+
 def setup_logging(config, date_str):
     logs_dir = BASE_DIR / config.report.get("logs_dir", "logs")
     logs_dir.mkdir(exist_ok=True)
@@ -170,14 +237,20 @@ def run(args):
             try:
                 groups = ai_proc.find_duplicates(items)
                 if groups:
-                    drop = set()
-                    for g in groups:
-                        # 每组保留相关度最高（score 最高，相同取更靠前）的一条
-                        best = max(g, key=lambda i: (items[i].score, -i))
-                        drop.update(i for i in g if i != best)
-                    items = [it for i, it in enumerate(items) if i not in drop]
-                    log.info("AI 跨源去重：合并 %d 组，去除 %d 条",
-                             len(groups), len(drop))
+                    max_group = int(config.ai_cfg.get(
+                        "dedup_max_group_size", 4))
+                    max_ratio = float(config.ai_cfg.get(
+                        "dedup_max_drop_ratio", 0.30))
+                    items, stats = apply_ai_duplicate_groups(
+                        items, groups, max_group, max_ratio)
+                    if stats["guarded"]:
+                        log.warning(
+                            "AI 去重触发安全阀：拟删除 %.1f%%，超过 %.1f%%；本次跳过去重",
+                            stats["proposed_ratio"] * 100, max_ratio * 100)
+                    else:
+                        log.info(
+                            "AI 跨源去重：接受 %d 组、拒绝 %d 个可疑组、去除 %d 条",
+                            stats["accepted"], stats["rejected"], stats["dropped"])
                 return items
             except Exception as e:  # noqa: BLE001
                 log.warning("AI 去重异常，回退摘要相似度: %s", e)
@@ -223,7 +296,10 @@ def run(args):
     for k, lst in grouped.items():
         lst.sort(key=lambda x: (x.score, x.published or dt_min),
                  reverse=True)
-        grouped[k] = lst[: int(cats_cfg[k].get("max_items", 10))]
+        limit = int(cats_cfg[k].get("max_items", 10))
+        per_source_limit = int(config.report.get(
+            "max_items_per_source_in_category", 3))
+        grouped[k] = select_diverse_items(lst, limit, per_source_limit)
     log.info("分类数量: %s",
              {k: len(v) for k, v in grouped.items()})
 

@@ -1,19 +1,20 @@
 # 每日新闻简报（个性化 PDF 日报）
 
-自动采集国内外新闻源，用智谱 BigModel 的免费 GLM 模型智能处理（摘要、英文翻译、分类、今日综述、跨源去重），生成护眼风 HTML 和图片型 PDF 日报，并将**两个附件同时发送到你的 QQ 邮箱**。
+自动采集国内外新闻源，用 DeepSeek V4 Flash 智能处理（摘要、英文翻译、分类、今日综述、跨源去重），生成护眼风 HTML 和图片型 PDF 日报，并将**两个附件同时发送到你的 QQ 邮箱**。
 
 ## 功能特点
 
-- 📡 **国内外 17 个新闻源**：科技（少数派、钛媒体、极客公园、爱范儿、Hacker News、The Verge、TechCrunch 等）、财经（CNBC、MarketWatch 等）、国际（NPR、DW 德国之声、The Guardian、Al Jazeera、NHK 等，全部使用原版英文源）
+- 📡 **国内外 25 个新闻源**：科技媒体之外，增加 BBC Business、美联储、SEC、BBC World、联合国、Nature、Nature 光学与光子学、NASA JPL 等财经监管、国际与科研一手源
 - 🌐 **国外源自动走你的梯子代理**，国内源直连
-- 🤖 **智谱 GLM-4.7-Flash 免费模型**（已关闭深度思考以提高批处理速度）：智能摘要、英文翻译成中文（**双语对照**）、智能分类、剔除低质/八卦内容、生成“今日要闻综述”
+- 🤖 **DeepSeek V4 Flash**：智能摘要、英文翻译成中文（**双语对照**）、五类编排、低质内容过滤和“今日要闻综述”；摘要覆盖事实、数据、背景、影响与不确定性
 - 🎨 **与护眼 HTML 同款的图片型 PDF**（网页长图智能分页，完整保留深色配色与卡片）；HTML 附件保留可复制文字和链接
 - 📊 **财经数据速览**：A股/港股/美股指数、汇率、金价
 - 🧠 **个性化**：按你的画像（光电专业 + 股民）加权筛选，聚焦半导体/AI/新能源/军工等持仓板块
-- 🛡️ **AI 完整性保护**：GLM 任一批次失败时不生成、不发送，定时任务稍后重试，避免混入本地降级摘要
+- 🛡️ **AI 完整性保护**：DeepSeek 任一批次失败时不生成、不发送，避免混入本地降级摘要
+- 🧯 **去重安全阀**：只合并不同来源对同一具体事件的报道；拒绝大组、跨类别、重叠分组，并限制单次删除比例，避免 AI 误删整批新闻
 - 🗂️ 按月归档，自动清理 N 天前的旧报告
 - 📬 **可靠定时 + 邮件**：每天 07:00 自动运行，睡眠/关机错过后自动补跑；隐藏启动器同步等待并把真实退出码返回计划任务，启动、结束和异常都有独立日志
-- 💰 **免费 AI**：报告页脚保留 token 用量统计，GLM-4.7-Flash 的估算费用为 ¥0
+- 💰 **用量透明**：报告页脚显示 DeepSeek token 用量与估算费用
 
 ## 快速开始
 
@@ -28,7 +29,7 @@ python -m venv .venv
 
 ### 2. 配置
 
-运行密钥录入工具并粘贴你的智谱 BigModel API Key（输入不回显，DPAPI 加密保存）：
+本机已配置 DPAPI 加密的 DeepSeek API Key；需要更新时运行密钥录入工具：
 
 ```bash
 python tools/store_key.py
@@ -39,11 +40,13 @@ python tools/store_key.py
 - `network.min_foreign_sources` / `min_foreign_items`：允许生成和发送日报所需的最低海外来源数与条数
 - `user_profile`：你的背景、关注领域、排除词（决定 AI 筛选倾向）
 - `report.categories`：各分类条数、保留天数
+- `report.max_items_per_source_in_category`：每个分类优先采用同一来源的条数上限，候选不足时自动回填
+- `ai.dedup_max_group_size` / `dedup_max_drop_ratio`：AI 去重单组及总删除比例上限
 - `sources`：新闻源列表（可自由增删）
 
 ### 3. 一键生成（手动）
 
-**双击桌面「每日新闻」图标**（或双击 `run_now.bat`）→ 自动抓取 → AI 处理（含跨源去重）→ 生成 HTML 和图片型 PDF → **以双附件发送到 QQ 邮箱**（不再自动打开），约 1-2 分钟。
+**双击桌面「每日新闻」图标**（或双击 `run_now.bat`）→ 自动抓取 → AI 处理（含跨源去重）→ 生成 HTML 和图片型 PDF → **以双附件发送到 QQ 邮箱**（不再自动打开），通常约 3-8 分钟，取决于当日新闻量和免费接口负载。
 
 命令行方式：
 ```bash
@@ -59,7 +62,7 @@ python -m news_crawler.main --wait-net           # 先检测 VPN/外网再生成
 
 ### 4. 定时生成 + 邮箱发送（默认启用）
 
-**流程**：每天 **07:00** 计划任务启动 → 严格检测配置的代理/VPN（**不通则每 5 分钟重试，当天 23:00 截止**）→ 抓取后校验海外来源覆盖 → GLM 串行处理 → 生成 PDF → 发送到 QQ 邮箱。海外覆盖不足或 GLM 临时限流时不生成、不发送，并在 5 分钟后重试。隐藏启动器会一直等待整个流程结束，将真实退出码交给 Windows；任务最长运行至 23:30，防止异常进程跨天占用任务实例。
+**流程**：每天 **07:00** 计划任务启动 → 严格检测配置的代理/VPN（**不通则每 5 分钟重试，当天 23:00 截止**）→ 抓取后校验海外来源覆盖 → DeepSeek 并行处理 → 生成 PDF → 发送到 QQ 邮箱。海外覆盖不足或 AI 临时不可用时不生成、不发送，并在 5 分钟后重试。隐藏启动器会一直等待整个流程结束，将真实退出码交给 Windows；任务最长运行至 23:30，防止异常进程跨天占用任务实例。
 
 **首次配置邮箱（必须一次）**：
 1. QQ 邮箱网页版 → 设置 → 账户 → **POP3/SMTP 服务 → 开启**并生成**授权码**（16 位纯字母数字，不是 QQ 密码）；
@@ -82,7 +85,7 @@ schtasks /Delete /TN DailyNewsReport /F  # 删除任务
 ```
 d:\新闻news\
 ├── config.yaml          # 全部配置（源/分类/条数/画像/代理）
-├── .env                 # BigModel API Key（已 gitignore，勿提交）
+├── .env                 # DeepSeek API Key（已 gitignore，勿提交）
 ├── news_crawler\        # 核心代码
 │   ├── fetcher.py       # RSS + JSON 抓取（代理/超时/容错）
 │   ├── fulltext.py      # 重点源正文抓取
@@ -90,7 +93,7 @@ d:\新闻news\
 │   ├── dedup.py         # 相似度去重
 │   ├── classify.py      # 本地关键词分类（兜底）
 │   ├── filter.py        # 排除八卦/软文/标题党
-│   ├── ai.py            # 智谱 GLM 批量摘要/翻译/综述
+│   ├── ai.py            # DeepSeek 批量摘要/翻译/综述
 │   ├── nlp_local.py     # 本地回退处理
 │   ├── netcheck.py      # 严格 VPN 检测、等待与海外源覆盖闸门
 │   ├── mail.py          # QQ 邮箱 SMTP 发送报告
@@ -106,7 +109,7 @@ d:\新闻news\
 ├── assets\news.ico      # 应用图标
 └── tools\
     ├── make_icon.py     # 图标生成脚本
-    ├── store_key.py     # BigModel Key 加密录入
+    ├── store_key.py     # 当前 AI 服务商 Key 加密录入
     └── store_smtp.py    # QQ 邮箱授权码加密录入
 ```
 
@@ -134,9 +137,9 @@ d:\新闻news\
 
 ## 安全说明
 
-- API Key 已通过 **Windows DPAPI 加密**存入 `.env` 的 `BIGMODEL_API_KEY_ENC`，**绑定当前 Windows 用户与本机**，明文不落盘；即使 `.env` 文件被拷贝，也无法在其它机器或账号上解密盗用。
+- API Key 已通过 **Windows DPAPI 加密**存入 `.env` 的 `DEEPSEEK_API_KEY_ENC`，**绑定当前 Windows 用户与本机**，明文不落盘；即使 `.env` 文件被拷贝，也无法在其它机器或账号上解密盗用。
 - 旧明文 `.env` 文件已被 `.gitignore` 排除，不会进代码库。
 - 首次使用或更换 Key：把明文填入 `.env` 后运行 `python tools/store_key.py`，会自动加密并清除明文。
 - 更换电脑/重装系统后需重新运行 `tools/store_key.py` 加密新 Key。
 - QQ 邮箱 SMTP 授权码同样通过 DPAPI 加密存入 `.env` 的 `QQ_SMTP_AUTH_ENC`（`tools/store_smtp.py` 录入），明文不落盘。
-- 若 Key 曾泄露，可在智谱开放平台重置，再运行 `tools/store_key.py` 更新。
+- 若 Key 曾泄露，可在 DeepSeek 开放平台重置，再运行 `tools/store_key.py` 更新。

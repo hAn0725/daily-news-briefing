@@ -13,7 +13,7 @@ from .classify import classify_item
 
 log = logging.getLogger("news")
 
-CATS = ("finance", "tech", "world")
+CATS = ("finance", "tech", "science", "world", "other")
 
 
 class AIProcessor:
@@ -29,6 +29,10 @@ class AIProcessor:
         self.concurrent = max(1, int(config.ai_cfg.get("concurrency", 4)))
         self.required = bool(config.ai_cfg.get("required", False))
         self.max_tokens = int(config.ai_cfg.get("max_tokens", 8192))
+        self.feed_summary_chars = int(
+            config.ai_cfg.get("feed_summary_chars", 900))
+        self.full_text_chars = int(
+            config.ai_cfg.get("full_text_chars", 1600))
         self.retry_base = float(config.ai_cfg.get("retry_base_seconds", 2))
         self.min_request_interval = float(
             config.ai_cfg.get("min_request_interval_seconds", 0))
@@ -96,11 +100,20 @@ class AIProcessor:
                         delay = float(retry_after)
                     except (TypeError, ValueError):
                         delay = self.retry_base * (2 ** attempt)
+                    log.warning(
+                        "AI 请求失败（HTTP %s），%.0f 秒后重试 %d/%d",
+                        status or "网络错误", max(1, min(delay, 120)),
+                        attempt + 2, attempts)
                     time.sleep(max(1, min(delay, 120)))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
-                # A malformed model response is deterministic for this request;
-                # retrying it only increases cost and delays the local fallback.
                 last = e
+                if attempt < attempts - 1:
+                    delay = min(self.retry_base * (attempt + 1), 30)
+                    log.warning(
+                        "AI 返回格式异常，%.0f 秒后重试 %d/%d: %s",
+                        delay, attempt + 2, attempts, e)
+                    time.sleep(delay)
+                    continue
                 break
         raise RuntimeError(f"AI 调用失败: {last}")
 
@@ -141,11 +154,13 @@ class AIProcessor:
             f"重点关注领域：{focus}\n"
             f"优先级：{prio}\n"
             "处理要求：\n"
-            "1. 剔除娱乐八卦、明星绯闻、社会猎奇、软文广告、标题党、低质量或与用户需求无关的内容。\n"
-            "2. 优先保留与用户关注领域相关、或具有重要性的新闻。\n"
-            f"3. 每条用中文写 6-8 句、约 {summary_chars} 字的摘要，信息充分时不要低于 150 字（信息充实，尽量保留具体数字/人名/时间/机构等细节；原文信息有限时写到信息允许的程度即可，切勿编造原文没有的事实），风格：{style}，语言{lv}。\n"
+            "1. 只剔除娱乐八卦、社会猎奇、软文广告、标题党和明显低质量内容；"
+            "不要仅因新闻不属于用户重点关注方向而删除，具有公共、经济、科技或国际意义的新闻应保留。\n"
+            "2. 用户关注领域用于提高 score，不用于缩窄新闻覆盖面；兼顾重要性、来源多样性和议题广度。\n"
+            f"3. 每条用中文写 6-8 句、约 {summary_chars} 字的摘要。按“发生了什么—关键数字/主体—背景或原因—潜在影响—尚待确认事项”组织；信息不足时明确说明，不凑字、不编造。风格：{style}，语言{lv}。\n"
             "4. 若原新闻为英文，须提供中文译名 cn_title；中文新闻 cn_title 留空。\n"
-            "5. 分类：finance=财经与股市, tech=科技前沿, world=国际大事, other=其他。\n"
+            "5. 分类：finance=财经与股市，tech=科技与产业，science=科学与研究，"
+            "world=国际大事，other=有价值但不属于前四类的综合观察。\n"
             "6. 相关度评分 score 用 1-5 的整数，5 为最相关/最重要。\n"
             '只输出 JSON，格式：{"items":[{"index":0,"keep":true,"cn_title":"...","cn_summary":"...","category":"finance","score":4}]}'
         )
@@ -168,8 +183,8 @@ class AIProcessor:
                 {
                     "index": i,
                     "title": it.title,
-                    "summary": (it.summary or "")[:600],
-                    "full_text": (it.full_text or "")[:400],
+                    "summary": (it.summary or "")[:self.feed_summary_chars],
+                    "full_text": (it.full_text or "")[:self.full_text_chars],
                     "source": it.source,
                     "language": it.language,
                 }
@@ -212,7 +227,7 @@ class AIProcessor:
             except Exception as e:  # noqa: BLE001
                 if self.required:
                     raise RuntimeError(
-                        f"第 {bi + 1} 批 AI 处理失败，已禁止本地降级"
+                        f"第 {bi + 1} 批 AI 处理失败，已禁止本地降级: {e}"
                     ) from e
                 log.warning("第 %d 批 AI 处理失败，本地兜底: %s", bi + 1, e)
                 for it in batch:
@@ -247,16 +262,20 @@ class AIProcessor:
             return []
         brief = [
             {"index": i, "title": it.cn_title or it.title,
-             "summary": (it.cn_summary or "")[:200]}
+             "summary": (it.cn_summary or "")[:200],
+             "source": it.source, "category": it.category}
             for i, it in enumerate(items)
         ]
         system = (
-            "你是新闻去重助手。给定一批新闻（含标题与中文摘要），找出“报道同一事件/主题”的条目并分成组。\n"
-            "判定为重复的典型情况（不同媒体/角度/措辞都算）：\n"
+            "你是严格的新闻去重助手。只找出报道同一个具体事件的条目，不能按宽泛主题、行业或同一公司聚类。\n"
+            "判定为重复的典型情况（必须能确认具体事件相同）：\n"
             "- 同一家公司/机构发布的同一件事：同一份财报、同一产品发布会、同一笔并购/融资、同一次上市，即使角度不同（如一篇讲财报数据、一篇讲战略、一篇讲股价反应）也算重复，应合并为一组\n"
             "- 同一场事件：同一次袭击、同一条政策、同一个选举结果、同一次事故、同一条地缘冲突\n"
-            "不算重复：同一主题但对象/事件不同（如两家不同公司的各自财报、两次不同地区的袭击）。\n"
-            "只输出 JSON：{\"groups\":[[0,5],[1,3,7]]}，index 为输入中的序号；无重复则输出 {\"groups\":[]}。"
+            "不算重复：同一主题/行业/公司但具体事件不同；仅背景相似；仅关键词相同；"
+            "同一持续性议题在不同日期出现的新进展。\n"
+            "约束：每组必须来自不同新闻源、类别一致、包含 2-4 条；各组不得共享 index。"
+            "拿不准时不要合并。只输出 JSON：{\"groups\":[[0,5],[1,3,7]]}，"
+            "index 为输入中的序号；无重复则输出 {\"groups\":[]}。"
         )
         try:
             data = self._chat(system, json.dumps(brief, ensure_ascii=False))

@@ -65,7 +65,7 @@ class Config:
                 raise ConfigError(f"{section}.{key} 必须是正整数") from exc
 
         for key in ("hours_back", "keep_days", "fulltext_cap",
-                    "max_items_per_source"):
+                    "max_items_per_source", "max_items_per_source_in_category"):
             non_negative("report", key)
         positive("network", "request_timeout", 15)
         non_negative("network", "retries")
@@ -74,9 +74,16 @@ class Config:
         positive("ai", "timeout", 120)
         non_negative("ai", "max_retries")
         for key in ("batch_size", "concurrency", "max_tokens",
-                    "retry_base_seconds"):
+                    "retry_base_seconds", "feed_summary_chars",
+                    "full_text_chars", "dedup_max_group_size"):
             positive("ai", key)
         non_negative("ai", "min_request_interval_seconds")
+        try:
+            ratio = float(self.ai_cfg.get("dedup_max_drop_ratio", 0.30))
+            if not 0 <= ratio <= 1:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("ai.dedup_max_drop_ratio 必须在 0 到 1 之间") from exc
         pdf_cfg = self.report.get("pdf", {}) or {}
         if not isinstance(pdf_cfg, Mapping):
             raise ConfigError("report.pdf 必须是 YAML 对象")

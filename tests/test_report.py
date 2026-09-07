@@ -32,3 +32,16 @@ def test_safe_link_rejects_non_web_schemes():
     )
     assert _safe_link("javascript:alert(1)") == "#"
     assert _safe_link("file:///C:/secret.txt") == "#"
+
+
+def test_footer_reports_sources_actually_used():
+    config = SimpleNamespace(
+        categories={"tech": {"title": "Tech"}},
+        sources=[SimpleNamespace(name=name) for name in ("A", "B", "C")],
+    )
+    item = NewsItem(title="news", url="https://example.com", source="A",
+                    cn_summary="summary", category="tech")
+
+    result = build_html(config, "2026-09-07", {"tech": [item]}, "", [])
+
+    assert "实际采用 1 个来源（配置 3 个）" in result

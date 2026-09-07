@@ -1,7 +1,7 @@
-"""把智谱 BigModel API Key 用 Windows DPAPI 加密后写入 .env。
+"""把当前配置的 AI API Key 用 Windows DPAPI 加密后写入 .env。
 
 用法：python tools/store_key.py
-效果：.env 只保留 BIGMODEL_API_KEY_ENC（加密密文，绑定当前 Windows 用户与本机），
+效果：.env 只保留对应的 *_API_KEY_ENC（加密密文，绑定当前 Windows 用户与本机），
      明文不再落盘；即使文件被拷贝也无法在其它机器/账号解密。
 更换 Key 后重新运行本脚本即可。
 """
@@ -11,6 +11,8 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
@@ -19,10 +21,17 @@ from dotenv import load_dotenv  # noqa: E402
 from news_crawler.secure import protect  # noqa: E402
 
 load_dotenv(BASE / ".env")
-env_name = "BIGMODEL_API_KEY"
+config = yaml.safe_load((BASE / "config.yaml").read_text(encoding="utf-8")) or {}
+ai_config = config.get("ai", {}) or {}
+provider = str(ai_config.get("provider") or "deepseek").lower()
+env_name = str(ai_config.get("api_key_env") or (
+    "BIGMODEL_API_KEY" if provider == "bigmodel" else "DEEPSEEK_API_KEY"
+))
+provider_name = "智谱 BigModel" if provider == "bigmodel" else "DeepSeek"
 key = os.getenv(env_name, "").strip()
 if not key:
-    key = getpass.getpass("请粘贴智谱 BigModel API Key（输入不回显）：").strip()
+    key = getpass.getpass(
+        f"请粘贴 {provider_name} API Key（输入不回显）：").strip()
 if not key:
     print("[错误] 未输入 API Key。")
     sys.exit(1)

@@ -10,8 +10,10 @@ from urllib.parse import urlsplit
 
 CAT_META = {
     "finance": {"icon": "📈", "sub": "行情 · 持仓板块 · 宏观政策"},
-    "tech": {"icon": "💡", "sub": "半导体 · AI · 光电 · 学术科研"},
+    "tech": {"icon": "💡", "sub": "半导体 · AI · 光电 · 产业趋势"},
+    "science": {"icon": "🔬", "sub": "基础研究 · 工程突破 · 航空航天"},
     "world": {"icon": "🌍", "sub": "地缘 · 贸易 · 国际大事"},
+    "other": {"icon": "🧭", "sub": "公共议题 · 社会趋势 · 跨界观察"},
 }
 
 CSS = """
@@ -186,7 +188,9 @@ def build_html(config, date_str, grouped, summary, market,
 
     # 页脚
     total = sum(len(v) for v in grouped.values())
-    src_count = len(config.sources)
+    src_count = len({item.source for items in grouped.values()
+                     for item in items})
+    configured_src_count = len(config.sources)
     if ai_usage:
         usage_txt = (f"本次消耗 {ai_usage['total_tokens']} tokens"
                      f"（输入 {ai_usage['prompt_tokens']} / "
@@ -194,7 +198,8 @@ def build_html(config, date_str, grouped, summary, market,
     else:
         usage_txt = "本次未使用 AI（本地模式）"
     parts.append(
-        f"<div class='footer'>共 {total} 条新闻 · 覆盖 {src_count} 个新闻源 · "
+        f"<div class='footer'>共 {total} 条新闻 · 实际采用 {src_count} 个来源"
+        f"（配置 {configured_src_count} 个） · "
         f"由 AI 自动整理 · {usage_txt}</div>"
     )
 

@@ -19,7 +19,7 @@ def fallback_process(items, config):
     # 源→分类 映射：关键词分类失败时按源归类
     src_cat = {}
     for s in config.sources:
-        if s.category in ("finance", "tech", "world"):
+        if s.category in ("finance", "tech", "science", "world", "other"):
             src_cat[s.name] = s.category
     for it in items:
         classify_item(it, config.profile)

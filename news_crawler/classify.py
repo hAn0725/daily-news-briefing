@@ -19,6 +19,12 @@ WORLD = ["美国", "白宫", "俄罗斯", "乌克兰", "欧盟", "北约", "英�
          "峰会", "G7", "G20", "联合国", "地缘", "停火", "选举", "国会", "贸易",
          "世贸", "WTO", "北约峰会"]
 
+SCIENCE = ["研究", "论文", "科学家", "实验", "发现", "观测", "临床试验", "基因",
+           "生物", "医学", "物理", "化学", "材料", "天文", "气候", "能源研究",
+           "Nature", "Science", "NASA", "JPL", "大学", "研究所", "科研",
+           "research", "scientist", "experiment", "physics", "biology",
+           "climate", "astronomy", "materials"]
+
 FOCUS = ["半导体", "芯片", "AI", "算力", "新能源", "锂电", "军工", "光电",
          "显示", "光学", "高端制造", "大模型", "机器人"]
 
@@ -26,18 +32,23 @@ FOCUS = ["半导体", "芯片", "AI", "算力", "新能源", "锂电", "军工",
 def _score(text: str, words) -> int:
     if not text:
         return 0
-    return sum(text.count(w) for w in words)
+    normalized = text.casefold()
+    return sum(normalized.count(str(w).casefold()) for w in words)
 
 
 def classify_item(item, profile=None) -> str:
-    """本地分类并计算相关度得分。返回分类（finance/tech/world/other）"""
+    """本地分类并计算相关度得分。"""
     text = f"{item.title} {item.summary}"
-    fin, tech, world = _score(text, FIN), _score(text, TECH), _score(text, WORLD)
-    if fin == tech == world == 0:
+    fin = _score(text, FIN)
+    tech = _score(text, TECH)
+    science = _score(text, SCIENCE)
+    world = _score(text, WORLD)
+    if fin == tech == science == world == 0:
         item.category = "other"
     else:
         item.category = max(
-            (("finance", fin), ("tech", tech), ("world", world)),
+            (("finance", fin), ("tech", tech), ("science", science),
+             ("world", world)),
             key=lambda x: x[1],
         )[0]
     # 相关度（1-5）：命中关注领域关键词即加分

@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -85,3 +86,30 @@ def test_required_ai_refuses_local_batch_fallback(monkeypatch):
 
     with pytest.raises(RuntimeError, match="禁止本地降级"):
         processor.process_items([item])
+
+
+def test_duplicate_prompt_includes_source_and_category(monkeypatch):
+    config = SimpleNamespace(
+        ai_cfg={"batch_size": 10, "concurrency": 1, "max_retries": 1},
+        api_key="test",
+        profile={},
+    )
+    processor = AIProcessor(config)
+    captured = {}
+
+    def fake_chat(_system, user):
+        captured["items"] = json.loads(user)
+        return {"groups": []}
+
+    monkeypatch.setattr(processor, "_chat", fake_chat)
+    items = [
+        NewsItem(title="A", url="https://a", source="source-a",
+                 category="science"),
+        NewsItem(title="B", url="https://b", source="source-b",
+                 category="science"),
+    ]
+
+    processor.find_duplicates(items)
+
+    assert captured["items"][0]["source"] == "source-a"
+    assert captured["items"][0]["category"] == "science"
