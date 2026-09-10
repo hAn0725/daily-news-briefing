@@ -8,6 +8,10 @@ report:
   output_dir: "output"    # 报告输出目录（按月归档）
   logs_dir: "logs"
   keep_days: 30           # 自动清理 N 天前的旧报告
+  keep_log_days: 90       # 自动清理 N 天前的每日日志（report_*.log）
+  # 生成互斥锁：防止"手动运行"与"定时/登录补跑"同时生成（双份邮件 + 双份 AI 费用）
+  lock_enabled: true
+  lock_stale_minutes: 90  # 超过此时长的锁视为上次异常退出残留，自动接管
   fulltext_cap: 80        # 增加重点源正文覆盖，供 AI 提炼背景与影响
   max_items_per_source: 50 # 单个源进入后续处理的最大条数，控制失效 RSS 和 AI 成本
   max_items_per_source_in_category: 3 # 每类优先最多采用同一来源 3 条，不足时自动回填
@@ -85,6 +89,8 @@ schedule:
   timezone: "Asia/Shanghai"
   retry_interval_minutes: 5   # 未联网/VPN未开时，每隔多少分钟重试一次
   deadline: "23:00"           # 当天到此时间仍未联网则放弃，次日 07:00 计划任务再试
+  # 看门狗：每天此时间后检查"当天日报是否已发送"，未发送则发一封诊断告警邮件
+  watchdog_start: "20:30"
   # 不再按峰谷价格延后日报，联网后立即生成。
   peak_periods: []
 

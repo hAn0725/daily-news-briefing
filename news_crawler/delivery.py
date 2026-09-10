@@ -47,15 +47,40 @@ def already_sent(state_path: Path, date_str: str, fingerprint: str) -> bool:
     return entry.get("content_sha256") == fingerprint
 
 
+def delivered_on(state_path: Path, date_str: str) -> bool:
+    """True 表示该日期已有成功发送记录（含 tools/resend.py 的手动补发）。"""
+    return bool(_read_state(state_path).get(date_str))
+
+
+def _write_state(state_path: Path, data: dict):
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = state_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+    os.replace(tmp_path, state_path)
+
+
 def mark_sent(state_path: Path, date_str: str, fingerprint: str):
     """Atomically record a successful delivery after SMTP confirms acceptance."""
-    state_path.parent.mkdir(parents=True, exist_ok=True)
     data = _read_state(state_path)
     data[date_str] = {
         "content_sha256": fingerprint,
         "sent_at": datetime.now().isoformat(timespec="seconds"),
     }
-    tmp_path = state_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
-    os.replace(tmp_path, state_path)
+    _write_state(state_path, data)
+
+
+def record_delivery(state_path: Path, date_str: str, note: str = ""):
+    """记录一次"已送达"，用于没有内容指纹的场景（如手动补发）。
+
+    看门狗与定时幂等判断只看该日期是否有记录，因此补发成功后不应再告警。
+    """
+    data = _read_state(state_path)
+    entry = {
+        "content_sha256": "manual-resend",
+        "sent_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    if note:
+        entry["note"] = note
+    data[date_str] = entry
+    _write_state(state_path, data)

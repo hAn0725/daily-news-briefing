@@ -19,6 +19,7 @@ BASE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE))
 
 from news_crawler.config import Config  # noqa: E402
+from news_crawler.delivery import record_delivery  # noqa: E402
 from news_crawler.mail import send_report_email  # noqa: E402
 from news_crawler.report import generate_pdf_from_html  # noqa: E402
 
@@ -46,9 +47,16 @@ def main() -> int:
     generate_pdf_from_html(html_path, pdf_path)
     print(f"PDF 已生成: {pdf_path}")
 
-    ok, msg = send_report_email(config=Config(), paths=[html_path, pdf_path],
+    cfg = Config()
+    ok, msg = send_report_email(config=cfg, paths=[html_path, pdf_path],
                                 date_str=date_str, summary=summary)
     print(("✅ 发送成功" if ok else "❌ 发送失败") + "：" + msg)
+    if ok:
+        # 记录发送状态：否则看门狗会以为这天没发出去，再发一封告警邮件
+        state_path = (BASE / cfg.report.get("logs_dir", "logs") /
+                      "delivery_state.json")
+        record_delivery(state_path, date_str, note="tools/resend.py 手动补发")
+        print(f"已记录发送状态: {state_path}")
     return 0 if ok else 1
 
 

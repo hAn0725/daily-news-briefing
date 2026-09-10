@@ -32,3 +32,27 @@ def cleanup_old(output_dir, keep_days: int):
                 d.rmdir()
         except Exception:  # noqa: BLE001
             pass
+
+
+def cleanup_logs(logs_dir, keep_days: int):
+    """清理超过保留天数的每日运行日志（report_YYYY-MM-DD.log）。
+
+    scheduler.log / run.log / watchdog.log 是累积量很小的文本，保留不删，
+    方便排查"几天前到底发生了什么"。
+    """
+    if keep_days <= 0:
+        return
+    cutoff = datetime.now() - timedelta(days=keep_days)
+    logs = Path(logs_dir)
+    if not logs.exists():
+        return
+    removed = 0
+    for f in logs.glob("report_*.log"):
+        try:
+            if datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
+                f.unlink()
+                removed += 1
+        except Exception:  # noqa: BLE001
+            pass
+    if removed:
+        log.info("已清理 %d 个过期日志", removed)

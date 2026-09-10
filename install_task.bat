@@ -23,6 +23,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem 登录后补跑：S0 现代待机上 StartWhenAvailable 不总是生效（2026-09-02 事故），
+rem 用"启动文件夹快捷方式"兜底（无需管理员权限，可随时手动删除）。
+rem main.py 有"当天已发送则跳过"的幂等守卫，与 07:00 任务重复触发
+rem 不会重复发邮件、也不会重复花 AI 费用。
+powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell;$lnk=$ws.CreateShortcut([Environment]::GetFolderPath('Startup')+'\每日新闻补跑.lnk');$lnk.TargetPath='wscript.exe';$lnk.Arguments='\"%~dp0run_scheduled.vbs\"';$lnk.WorkingDirectory='%~dp0';$lnk.Description='每日新闻简报：登录后补跑（当天已发送则自动跳过）';$lnk.Save();'STARTUP_SHORTCUT_OK'"
+if errorlevel 1 (
+    echo [警告] 登录补跑快捷方式创建失败（不影响 07:00 定时与看门狗）。
+)
+
 rem ---------- 看门狗任务：每天 20:30 检查当天日报是否已发送 ----------
 rem 未发送则发一封诊断告警邮件（电脑睡眠错过时开机后补跑检查）
 schtasks /Create /TN "DailyNewsWatchdog" /TR "wscript.exe \"%~dp0run_scheduled.vbs\" run_watchdog.bat" /SC DAILY /ST 20:30 /F
@@ -43,6 +52,7 @@ echo.
 echo 计划任务已注册：
 echo   DailyNewsReport   每天 07:00 隐藏运行（不弹黑框）：抓取 + AI + 发邮件
 echo   DailyNewsWatchdog 每天 20:30 检查当天是否已发送，未发送则发告警邮件
+echo 登录补跑：已在"启动"文件夹创建快捷方式"每日新闻补跑"（当天已发过则立即跳过）
 echo 若 7 点电脑处于睡眠/关机，唤醒或开机后会自动补跑。
 echo 查看任务：   schtasks /Query /TN DailyNewsReport /V
 echo 立即运行：   schtasks /Run /TN DailyNewsReport

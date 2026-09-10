@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -20,6 +21,7 @@ def test_run_returns_failure_when_report_is_saved_but_email_fails(
             "fulltext_cap": 0,
             "logs_dir": "logs",
             "keep_days": 30,
+            "lock_enabled": False,
         },
         network={},
         ai_cfg={},
@@ -116,6 +118,62 @@ def test_ai_dedup_safety_valve_rejects_excessive_total_deletion():
     assert result == items
     assert stats["guarded"]
     assert stats["dropped"] == 0
+
+
+def test_wait_net_skips_when_already_delivered(monkeypatch, tmp_path):
+    """定时/登录补跑模式下，当天已发送成功应立刻退出：不等网、不重复生成。"""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "delivery_state.json").write_text(
+        json.dumps({"2026-09-10": {"content_sha256": "x",
+                                   "sent_at": "2026-09-10T08:00:00"}}),
+        encoding="utf-8")
+    config = SimpleNamespace(
+        report={"logs_dir": "logs", "lock_enabled": False},
+        schedule={}, network={}, ai_cfg={}, profile={},
+        categories={}, sources=[], ai_enabled=False,
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("已发送成功时不应再等网或生成")
+
+    monkeypatch.setattr(main, "Config", lambda _path: config)
+    monkeypatch.setattr(main, "setup_logging", lambda *_args: None)
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(main, "wait_until_ready", unexpected)
+    monkeypatch.setattr(main, "Fetcher", unexpected)
+
+    args = SimpleNamespace(
+        config="", date="2026-09-10", wait_net=True, no_ai=True,
+        no_market=True, no_mail=False, resend_mail=False,
+    )
+    assert main.run(args) == 0
+
+
+def test_run_skips_generation_when_lock_is_held(monkeypatch, tmp_path):
+    """已有生成在跑时（锁被持有），本次直接跳过，避免双份邮件与费用。"""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "run.lock").write_text("held", encoding="utf-8")
+    config = SimpleNamespace(
+        report={"logs_dir": "logs", "lock_enabled": True},
+        schedule={}, network={}, ai_cfg={}, profile={},
+        categories={}, sources=[], ai_enabled=False,
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("锁被持有时不应开始生成")
+
+    monkeypatch.setattr(main, "Config", lambda _path: config)
+    monkeypatch.setattr(main, "setup_logging", lambda *_args: None)
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(main, "Fetcher", unexpected)
+
+    args = SimpleNamespace(
+        config="", date="2026-09-10", wait_net=False, no_ai=True,
+        no_market=True, no_mail=False, resend_mail=False,
+    )
+    assert main.run(args) == 0
 
 
 def test_report_selection_prefers_source_diversity_and_backfills():

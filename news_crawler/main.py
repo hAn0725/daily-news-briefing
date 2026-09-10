@@ -4,6 +4,7 @@
 直到当天截止时间（默认 23:00）；抓取后还会校验海外新闻覆盖，避免发送残缺日报。
 """
 import argparse
+import atexit
 import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
@@ -15,13 +16,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from news_crawler import nlp_local, watchdog  # noqa: E402
+from news_crawler import lockfile, nlp_local, watchdog  # noqa: E402
 from news_crawler.ai import AIProcessor  # noqa: E402
-from news_crawler.cleanup import cleanup_old  # noqa: E402
+from news_crawler.cleanup import cleanup_logs, cleanup_old  # noqa: E402
 from news_crawler.config import Config  # noqa: E402
 from news_crawler.dedup import dedup_items  # noqa: E402
 from news_crawler.delivery import (  # noqa: E402
     already_sent,
+    delivered_on,
     mark_sent,
     report_fingerprint,
 )
@@ -138,6 +140,17 @@ def run(args):
     setup_logging(config, date_str)
     log = logging.getLogger("news")
 
+    logs_dir = BASE_DIR / config.report.get("logs_dir", "logs")
+    state_path = logs_dir / "delivery_state.json"
+
+    # 定时模式幂等：当天已发送成功（含手动补发）就立刻退出，不再等网/重新生成。
+    # 注意必须放在 waiting 之前——否则深夜（已过 23:00 截止）登录触发补跑时，
+    # 会先判定"超时未联网"并误发一封失败通知，即使当天日报早已发送成功。
+    if (args.wait_net and not args.resend_mail
+            and delivered_on(state_path, date_str)):
+        log.info("今天（%s）的日报已发送成功，跳过重复生成。", date_str)
+        return 0
+
     # ---------- 0. 计划任务模式：等待 VPN/外网 ----------
     # 未联网每 5 分钟重试，直到生成或当天截止；生成后不再检测。
     if args.wait_net and not wait_until_ready(config, log):
@@ -151,6 +164,18 @@ def run(args):
         except Exception:  # noqa: BLE001
             log.warning("失败通知邮件发送出错（不影响主流程）", exc_info=True)
         return 2
+
+    # 生成互斥锁：防止手动运行与定时任务同时生成（双份邮件 + 双份 AI 费用）。
+    # 放在联网等待之后加锁：等待期间不占用锁，手动刷新仍可正常生成。
+    lock_enabled = bool(config.report.get("lock_enabled", True))
+    lock_path = logs_dir / "run.lock"
+    if lock_enabled:
+        stale_min = int(config.report.get("lock_stale_minutes", 90))
+        if not lockfile.acquire(lock_path, stale_min):
+            log.warning("已有一次生成正在进行中（锁文件 %s），本次跳过。",
+                        lock_path)
+            return 0
+        atexit.register(lockfile.release, lock_path)
 
     log.info("===== 开始生成 %s 的每日新闻简报 =====", date_str)
 
@@ -342,12 +367,10 @@ def run(args):
             counts[title] = len(lst)
         pdf_path = next((Path(p) for p in paths
                          if str(p).lower().endswith(".pdf")), None)
-        state_path = (BASE_DIR / config.report.get("logs_dir", "logs") /
-                      "delivery_state.json")
         fingerprint = report_fingerprint(grouped, summary, market)
         if (pdf_path is not None and not args.resend_mail and
                 already_sent(state_path, date_str, fingerprint)):
-            ok, msg = True, "PDF unchanged since successful delivery; skipped"
+            ok, msg = True, "内容与上次成功发送的一致，已跳过重复发送"
         else:
             ok, msg = send_report_email(config, paths, date_str,
                                         summary=summary, cat_counts=counts)
@@ -360,6 +383,7 @@ def run(args):
     # ---------- 10. 清理旧报告 ----------
     keep_days = int(config.report.get("keep_days", 30))
     cleanup_old(out_dir, keep_days)
+    cleanup_logs(logs_dir, int(config.report.get("keep_log_days", 90)))
     if exit_code:
         log.error("===== 报告已生成，但发送未完成（退出码 %d）=====", exit_code)
     else:
