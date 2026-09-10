@@ -15,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from news_crawler import nlp_local  # noqa: E402
+from news_crawler import nlp_local, watchdog  # noqa: E402
 from news_crawler.ai import AIProcessor  # noqa: E402
 from news_crawler.cleanup import cleanup_old  # noqa: E402
 from news_crawler.config import Config  # noqa: E402
@@ -120,6 +120,14 @@ def setup_logging(config, date_str):
 
 def run(args):
     config = Config(args.config)
+
+    # 看门狗模式：只检查今天是否已发送并按需告警，不生成报告。
+    if getattr(args, "watchdog", False):
+        # 独立的轻量日志（stderr → bat 重定向到 logs\watchdog.log）
+        logging.basicConfig(level=logging.INFO,
+                            format="%(asctime)s [%(levelname)s] %(message)s")
+        return watchdog.run_watchdog(config)
+
     if args.date:
         try:
             date_str = datetime.strptime(args.date, "%Y-%m-%d").strftime("%Y-%m-%d")
@@ -133,6 +141,15 @@ def run(args):
     # ---------- 0. 计划任务模式：等待 VPN/外网 ----------
     # 未联网每 5 分钟重试，直到生成或当天截止；生成后不再检测。
     if args.wait_net and not wait_until_ready(config, log):
+        # 截止仍不联网：尽力发一封失败通知（同一天只发一次），再退出。
+        try:
+            watchdog.notify_failure_once(
+                config, "【每日新闻】今天的日报没能生成",
+                "到今天截止时间，VPN/外网检测始终未通过，今天的日报没有生成。\n"
+                "建议：确认梯子开启后，双击桌面「每日新闻」手动补跑，\n"
+                "或运行 schtasks /Run /TN DailyNewsReport。")
+        except Exception:  # noqa: BLE001
+            log.warning("失败通知邮件发送出错（不影响主流程）", exc_info=True)
         return 2
 
     log.info("===== 开始生成 %s 的每日新闻简报 =====", date_str)
@@ -356,6 +373,8 @@ def parse_args():
     p.add_argument("--config", default="", help="配置文件路径")
     p.add_argument("--no-ai", action="store_true", help="强制使用本地处理")
     p.add_argument("--no-market", action="store_true", help="跳过财经数据")
+    p.add_argument("--watchdog", action="store_true",
+                   help="看门狗：检查今天是否已发送，未发送则发一次诊断告警邮件（计划任务用）")
     p.add_argument("--wait-net", action="store_true",
                    help="生成前检测 VPN/外网，未通每5分钟重试直到当天截止（计划任务用）")
     p.add_argument("--no-mail", action="store_true", help="跳过邮件发送")
@@ -365,4 +384,20 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    sys.exit(run(parse_args()))
+    _args = parse_args()
+    try:
+        sys.exit(run(_args))
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # 生成阶段崩溃：记全栈日志，并尽力发一封失败通知（配置读不出就放弃）。
+        logging.getLogger("news").exception("生成过程发生未处理异常")
+        try:
+            watchdog.notify_failure_once(
+                Config(_args.config), "【每日新闻】今天的日报生成失败",
+                f"生成过程发生异常：{type(exc).__name__}: {exc}\n"
+                "请查看 logs\\ 下当天日志（report_*.log / run.log）。\n"
+                "修复后可双击桌面「每日新闻」手动重跑。")
+        except Exception:  # noqa: BLE001
+            pass
+        sys.exit(1)

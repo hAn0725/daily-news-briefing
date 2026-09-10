@@ -12,6 +12,7 @@ def _config(network):
 
 def test_configured_proxy_never_falls_back_to_direct(monkeypatch):
     calls = []
+    monkeypatch.setattr("news_crawler.netcheck.time.sleep", lambda s: None)
 
     def fail_proxy(*args, **kwargs):
         calls.append(kwargs.get("proxies"))
@@ -32,10 +33,54 @@ def test_configured_proxy_never_falls_back_to_direct(monkeypatch):
         "check_urls": ["https://www.google.com/generate_204"],
     })
     assert check_online(config, quiet=True) is False
+    # 每个探针默认尝试 2 次（应对节点随机抖动）
     assert calls == [{
         "http": "http://127.0.0.1:7892",
         "https": "http://127.0.0.1:7892",
-    }]
+    }] * 2
+
+
+def test_probe_retries_then_succeeds(monkeypatch):
+    """节点随机抖动：第一次超时、第二次 204 → 应判定联网成功。"""
+    calls = []
+    monkeypatch.setattr("news_crawler.netcheck.time.sleep", lambda s: None)
+    ok = SimpleNamespace(status_code=204)
+
+    def flaky(*args, **kwargs):
+        calls.append(kwargs.get("proxies"))
+        if len(calls) == 1:
+            raise requests.Timeout("read timed out")
+        return ok
+
+    monkeypatch.setattr(requests, "get", flaky)
+    config = _config({
+        "proxy": "http://127.0.0.1:7892",
+        "check_urls": ["https://www.google.com/generate_204"],
+    })
+    assert check_online(config, quiet=True) is True
+    assert len(calls) == 2
+
+
+def test_attempts_configurable(monkeypatch):
+    calls = []
+    monkeypatch.setattr("news_crawler.netcheck.time.sleep", lambda s: None)
+
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(requests, "get", fail)
+    config = _config({
+        "proxy": "http://127.0.0.1:7892",
+        "check_attempts": 1,
+        "check_urls": [
+            "https://www.google.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+        ],
+    })
+    assert check_online(config, quiet=True) is False
+    # attempts=1：两个探针地址各试一次
+    assert len(calls) == 2
 
 
 def test_probe_requires_expected_status(monkeypatch):

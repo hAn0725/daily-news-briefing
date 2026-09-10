@@ -6,6 +6,7 @@
 Option Explicit
 Const ForAppending = 8
 Dim fso, dirPath, sh, logPath, command, exitCode, errorNumber, errorText
+Dim targetBat, re
 Set fso = CreateObject("Scripting.FileSystemObject")
 dirPath = fso.GetParentFolderName(WScript.ScriptFullName)
 If Not fso.FolderExists(dirPath & "\logs") Then
@@ -27,8 +28,24 @@ Sub WriteLog(message)
     On Error GoTo 0
 End Sub
 
-' 同步等待并回传真实退出码，避免只记录 wscript 启动成功。
-command = """" & dirPath & "\run_daily.bat"""
+' Optional arg: which bat to launch. Default run_daily.bat.
+' The watchdog task passes run_watchdog.bat. Only plain file names
+' (letters/digits/underscore/hyphen + .bat) are accepted, no paths.
+targetBat = "run_daily.bat"
+If WScript.Arguments.Count >= 1 Then
+    Set re = New RegExp
+    re.Pattern = "^[A-Za-z0-9_\-]+\.bat$"
+    re.IgnoreCase = True
+    If re.Test(WScript.Arguments(0)) Then
+        targetBat = WScript.Arguments(0)
+    Else
+        WriteLog "BAD_TARGET arg=" & WScript.Arguments(0)
+        WScript.Quit 101
+    End If
+End If
+
+' Wait synchronously and report the real exit code.
+command = """" & dirPath & "\" & targetBat & """"
 WriteLog "START command=" & command
 On Error Resume Next
 exitCode = sh.Run(command, 0, True)

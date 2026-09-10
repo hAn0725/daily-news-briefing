@@ -30,6 +30,72 @@ def _deliver(host, port, use_ssl, msg, sender, to_addrs, password):
             s.send_message(msg, from_addr=sender, to_addrs=to_addrs)
 
 
+def _deliver_with_retry(host, port, msg, sender, to_addrs, password):
+    """带重试与端口回退的发送：同一端口重试一次，465 失败再自动换 587。
+
+    实测网络偶发瞬断（Connection unexpectedly closed）。返回 (是否成功, 最后错误)。
+    """
+    attempts = [(port, port == 465), (port, port == 465)]
+    attempts.append((587, False) if port == 465 else (465, True))
+    last_err = None
+    for i, (p, use_ssl) in enumerate(attempts, 1):
+        try:
+            _deliver(host, p, use_ssl, msg, sender, to_addrs, password)
+            if i > 1:
+                log.info("邮件在第 %d 次尝试发送成功", i)
+            return True, None
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            log.warning("SMTP 第 %d/%d 次尝试失败（%s:%s %s）: %s",
+                        i, len(attempts), host, p,
+                        "SSL" if use_ssl else "STARTTLS", e)
+            if i < len(attempts):
+                time.sleep(3)
+    log.debug("邮件发送异常详情", exc_info=True)
+    return False, last_err
+
+
+def _smtp_settings(config):
+    """从配置取出发送所需字段；返回 (host, port, sender, to_addrs, password, 缺失项)"""
+    cfg = config.email or {}
+    host = (cfg.get("smtp_host") or "smtp.qq.com").strip()
+    port = int(cfg.get("smtp_port", 465))
+    sender = config.email_from
+    to_addrs = config.email_to or ([sender] if sender else [])
+    password = config.smtp_password
+    missing = [name for name, val in
+               (("发件邮箱(.env: SMTP_FROM_ADDR)", sender),
+                ("SMTP授权码(运行 tools/store_smtp.py 录入)", password))
+               if not val]
+    return host, port, sender, to_addrs, password, missing
+
+
+def _build_plain_message(sender, to_addrs, subject, plain_text):
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = formataddr((str(Header("每日新闻简报", "utf-8")), sender))
+    msg["To"] = ", ".join(to_addrs)
+    msg["Date"] = formatdate(localtime=True)
+    msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+    return msg
+
+
+def send_alert_email(config, subject, plain_text):
+    """发送纯文本告警邮件（看门狗/失败通知用）；返回 (是否成功, 说明)。"""
+    cfg = config.email or {}
+    if not cfg.get("enabled", False):
+        return False, "未启用（config.yaml: email.enabled=false）"
+    host, port, sender, to_addrs, password, missing = _smtp_settings(config)
+    if missing:
+        return False, "邮箱配置不完整，缺少: " + "、".join(missing)
+    msg = _build_plain_message(sender, to_addrs, subject, plain_text)
+    ok, err = _deliver_with_retry(host, port, msg, sender, to_addrs, password)
+    if ok:
+        return True, f"已发送至 {', '.join(to_addrs)}"
+    return False, (f"发送失败（已重试）: {err}"
+                   "（若持续失败：检查授权码是否为 16 位、代理是否干扰 SMTP）")
+
+
 def send_report_email(config, paths, date_str, summary="", cat_counts=None):
     """发送 PDF 和 HTML 双附件报告；返回 (是否成功, 说明文字)。
 
@@ -39,17 +105,8 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
     if not cfg.get("enabled", False):
         return False, "未启用（config.yaml: email.enabled=false）"
 
-    host = (cfg.get("smtp_host") or "smtp.qq.com").strip()
-    port = int(cfg.get("smtp_port", 465))
-    sender = config.email_from
-    to_addrs = config.email_to or ([sender] if sender else [])
+    host, port, sender, to_addrs, password, missing = _smtp_settings(config)
     prefix = (cfg.get("subject_prefix") or "【每日新闻简报】").strip()
-    password = config.smtp_password
-
-    missing = [name for name, val in
-               (("发件邮箱(.env: SMTP_FROM_ADDR)", sender),
-                ("SMTP授权码(运行 tools/store_smtp.py 录入)", password))
-               if not val]
     if missing:
         return False, "邮箱配置不完整，缺少: " + "、".join(missing)
 
@@ -91,23 +148,9 @@ def send_report_email(config, paths, date_str, summary="", cat_counts=None):
     msg.attach(html_att)
 
     # 发送（带重试与端口回退）：实测网络偶发瞬断（Connection unexpectedly
-    # closed），同一端口重试一次，465 失败再自动换 587 STARTTLS 兼一段
-    attempts = [(port, port == 465), (port, port == 465)]
-    attempts.append((587, False) if port == 465 else (465, True))
-    last_err = None
-    for i, (p, use_ssl) in enumerate(attempts, 1):
-        try:
-            _deliver(host, p, use_ssl, msg, sender, to_addrs, password)
-            if i > 1:
-                log.info("邮件在第 %d 次尝试发送成功", i)
-            return True, f"已发送至 {', '.join(to_addrs)}"
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            log.warning("SMTP 第 %d/%d 次尝试失败（%s:%s %s）: %s",
-                        i, len(attempts), host, p,
-                        "SSL" if use_ssl else "STARTTLS", e)
-            if i < len(attempts):
-                time.sleep(3)
-    log.debug("邮件发送异常详情", exc_info=True)
-    return False, (f"发送失败（已尝试 {len(attempts)} 次）: {last_err}"
+    # closed），同一端口重试一次，465 失败再自动换 587 STARTTLS。
+    ok, err = _deliver_with_retry(host, port, msg, sender, to_addrs, password)
+    if ok:
+        return True, f"已发送至 {', '.join(to_addrs)}"
+    return False, (f"发送失败（已重试）: {err}"
                    "（若持续失败：检查授权码是否为 16 位、代理是否干扰 SMTP）")

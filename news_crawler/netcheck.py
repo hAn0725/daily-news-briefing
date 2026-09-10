@@ -46,23 +46,35 @@ def check_online(config, quiet=False):
         # 只有未配置本地代理时，才用这条路径覆盖 TUN 模式 VPN。
         attempts = [("直连（TUN）", None)]
 
+    # 每个探针地址尝试多次（2026-09-10：VPN 节点对 Google 系域名随机超时，
+    # 单次尝试会让"时通时断"的节点整天被误判为未联网）。
+    tries_per_url = max(1, int(net.get("check_attempts", 2)))
+    backoff = max(0.0, float(net.get("check_retry_backoff", 1.5)))
+
     for label, proxies in attempts:
         for url in urls:
-            try:
-                if proxies:
-                    r = requests.get(url, proxies=proxies, timeout=timeout,
-                                     headers=_UA)
-                else:
-                    with requests.Session() as s:
-                        s.trust_env = False  # 忽略系统/环境代理，真正直连测试
-                        r = s.get(url, timeout=timeout, headers=_UA)
-                if r.status_code in expected_statuses:
-                    if not quiet:
-                        log.info("联网检测通过（%s %s → HTTP %d）",
-                                 label, url, r.status_code)
-                    return True
-            except Exception:  # noqa: BLE001
-                continue
+            for attempt in range(1, tries_per_url + 1):
+                try:
+                    if proxies:
+                        r = requests.get(url, proxies=proxies, timeout=timeout,
+                                         headers=_UA)
+                    else:
+                        with requests.Session() as s:
+                            s.trust_env = False  # 忽略系统/环境代理，真正直连测试
+                            r = s.get(url, timeout=timeout, headers=_UA)
+                    if r.status_code in expected_statuses:
+                        if not quiet:
+                            log.info("联网检测通过（%s %s → HTTP %d）",
+                                     label, url, r.status_code)
+                        return True
+                    log.debug("联网探针异常响应（%s %s 第%d次）: HTTP %d",
+                              label, url, attempt, r.status_code)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("联网探针失败（%s %s 第%d/%d次）: %s: %.160s",
+                              label, url, attempt, tries_per_url,
+                              type(exc).__name__, str(exc))
+                if attempt < tries_per_url and backoff > 0:
+                    time.sleep(backoff)
     return False
 
 

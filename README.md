@@ -64,18 +64,21 @@ python -m news_crawler.main --wait-net           # 先检测 VPN/外网再生成
 
 **流程**：每天 **07:00** 计划任务启动 → 严格检测配置的代理/VPN（**不通则每 5 分钟重试，当天 23:00 截止**）→ 抓取后校验海外来源覆盖 → DeepSeek 并行处理 → 生成 PDF → 发送到 QQ 邮箱。海外覆盖不足或 AI 临时不可用时不生成、不发送，并在 5 分钟后重试。隐藏启动器会一直等待整个流程结束，将真实退出码交给 Windows；任务最长运行至 23:30，防止异常进程跨天占用任务实例。
 
+**看门狗（每天 20:30）**：第二个计划任务 `DailyNewsWatchdog` 会检查当天日报是否已发送成功；若尚未发送，会自动从日志中诊断原因（启动器报错？VPN 没通？邮件发送失败？）并发一封**告警邮件**到你邮箱，同一天最多提醒一次。所以：当天若既没收到日报、也没收到告警邮件，多半是电脑一直没开机——开机后两者都会自动补上。
+
 **首次配置邮箱（必须一次）**：
 1. QQ 邮箱网页版 → 设置 → 账户 → **POP3/SMTP 服务 → 开启**并生成**授权码**（16 位纯字母数字，不是 QQ 密码）；
 2. 终端运行 `python tools/store_smtp.py`，粘贴授权码（不回显，自动加密存入 `.env` 并验证登录）；首次运行会顺带输入 QQ 邮箱地址，存在本地 `.env`，**不进公开仓库**；
 3. 收件邮箱在 `.env` 的 `SMTP_TO_ADDRS` 配置（多个用英文逗号分隔，留空则发给自己）。
 
-**注册/更新定时任务**：右键 `install_task.bat` 并选择“以管理员身份运行”（任务名 `DailyNewsReport`，错过 07:00 会在开机/唤醒后补跑）。更新代码后也应重新运行一次，使最新可靠性设置写入 Windows。
+**注册/更新定时任务**：右键 `install_task.bat` 并选择“以管理员身份运行”（会注册两个任务：`DailyNewsReport` 每天 07:00 生成发送；`DailyNewsWatchdog` 每天 20:30 检查并发告警。错过时刻会在开机/唤醒后补跑）。更新代码后也应重新运行一次，使最新可靠性设置写入 Windows。
 
 常用命令：
 ```bat
-schtasks /Run /TN DailyNewsReport        # 立即运行一次
+schtasks /Run /TN DailyNewsReport        # 立即生成并发送一次
+schtasks /Run /TN DailyNewsWatchdog      # 立即检查一次（未发送则发告警）
 schtasks /Query /TN DailyNewsReport /V /FO LIST  # 查看真实退出码和下次运行时间
-schtasks /Delete /TN DailyNewsReport /F  # 删除任务
+schtasks /Delete /TN DailyNewsReport /F  # 删除任务（Watchdog 同理）
 ```
 
 日志分为两层：`logs\scheduler.log` 记录隐藏启动器的启动时间、结束时间和真实退出码；`logs\run.log` 与 `logs\report_YYYY-MM-DD.log` 记录 Python 选择、联网等待、抓取、生成及邮件发送详情。任务返回码 `0` 表示完整流程成功；`2` 表示等待条件超时，`3` 表示海外覆盖不足，`4` 表示必需的 AI 处理失败，`5` 表示报告已生成但邮件发送失败，`100` 表示隐藏启动器未能启动批处理。
@@ -95,8 +98,9 @@ d:\新闻news\
 │   ├── filter.py        # 排除八卦/软文/标题党
 │   ├── ai.py            # DeepSeek 批量摘要/翻译/综述
 │   ├── nlp_local.py     # 本地回退处理
-│   ├── netcheck.py      # 严格 VPN 检测、等待与海外源覆盖闸门
-│   ├── mail.py          # QQ 邮箱 SMTP 发送报告
+│   ├── netcheck.py      # 严格 VPN 检测（多探针重试）、等待与海外源覆盖闸门
+│   ├── watchdog.py      # 看门狗：当天未发送则自动诊断并发告警邮件
+│   ├── mail.py          # QQ 邮箱 SMTP 发送报告（含纯文本告警邮件）
 │   ├── report.py        # HTML 报告 + 浏览器直出 PDF
 │   ├── cleanup.py       # 清理过期报告
 │   └── main.py          # 主流程
@@ -104,13 +108,15 @@ d:\新闻news\
 ├── logs\                # 调度器、批处理和日报运行日志
 ├── run_now.bat          # ★ 一键生成并发送邮箱（桌面快捷方式指向这里）
 ├── run_daily.bat        # 定时任务入口（07:00，含联网检测等待）
-├── run_scheduled.vbs    # 同步等待、回传退出码的隐藏启动器
-├── install_task.bat     # 注册每天 07:00 的定时任务
+├── run_watchdog.bat     # 看门狗任务入口（20:30，只检查与发告警）
+├── run_scheduled.vbs    # 同步等待、回传退出码的隐藏启动器（支持目标参数）
+├── install_task.bat     # 注册定时任务 + 看门狗任务
 ├── assets\news.ico      # 应用图标
 └── tools\
     ├── make_icon.py     # 图标生成脚本
     ├── store_key.py     # 当前 AI 服务商 Key 加密录入
-    └── store_smtp.py    # QQ 邮箱授权码加密录入
+    ├── store_smtp.py    # QQ 邮箱授权码加密录入
+    └── resend.py        # 按日期补发旧报告（不重复消耗 AI）
 ```
 
 ## 开发检查
@@ -126,7 +132,8 @@ d:\新闻news\
 
 ## 常见问题
 
-- **国外新闻抓不到？** 确认梯子已开启，且 `config.yaml` 里 `network.proxy` 是实际端口（一般 7890/7892/10809）。计划任务会等待，不会发送只有国内源的日报。
+- **当天一直没收到日报？** 三步自查：① 收到看门狗告警邮件了吗（每天 20:30 检查）？里面写明了最可能的原因；② 没收到告警也没收到日报 → 多半电脑一直睡眠，开机后两个任务会自动补跑；③ 着急的话直接双击桌面「每日新闻」手动生成。历史某天的报告错过了可用 `python tools/resend.py --date YYYY-MM-DD` 补发（不重复消耗 AI）。
+- **国外新闻抓不到？** 确认梯子已开启，且 `config.yaml` 里 `network.proxy` 是实际端口（一般 7890/7892/10809）。联网检测配置了多个探针地址（google/gstatic/cloudflare）且每个地址自动重试，个别探针抖动不再影响判定；若节点对 Google 系整体不稳，建议换个节点。计划任务会等待，不会发送只有国内源的日报。
 - **某个源失效了？** 在 `config.yaml` 的 `sources` 里删除或替换即可，单个源失败不影响整体。
 - **想换 AI 服务商？** `ai.py` 兼容 OpenAI 接口格式，改 `config.yaml` 的 `base_url`、`model` 和 `api_key_env` 即可。
 - **报告想更简洁/更详细？** 调整 `config.yaml` 的 `report.categories.*.max_items`（条数）或 `user_profile.item_summary_chars`（单条摘要字数）。
