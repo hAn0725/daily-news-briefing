@@ -12,6 +12,11 @@ __pycache__/
 .runtime/
 venv/
 
+# 打包产物（pip install -e . 会生成 egg-info）
+*.egg-info/
+build/
+dist/
+
 # 生成产物
 output/
 logs/

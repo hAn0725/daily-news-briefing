@@ -1,3 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daily-news-briefing"
+version = "0.1.0"
+description = "个性化每日新闻简报：多源抓取 + AI 摘要/翻译/去重 + HTML/PDF + QQ 邮件推送"
+requires-python = ">=3.12"
+# 依赖统一由 requirements.txt 管理，避免两处漂移；
+# 因此安装本项目用 `pip install -e . --no-deps`（CI 与 README 同款）。
+dependencies = []
+
+[tool.setuptools]
+# 扁平布局：包就在仓库根目录下（不是 src layout）
+packages = ["news_crawler"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --basetemp=tmp/pytest-work"
@@ -6,7 +23,7 @@ cache_dir = "tmp/pytest-cache-work"
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-extend-exclude = ["output", "logs", ".venv", ".runtime"]
+extend-exclude = ["output", "logs", "tmp", ".venv", ".runtime", "*.egg-info"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

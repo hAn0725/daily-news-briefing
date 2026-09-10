@@ -133,13 +133,19 @@ d:\新闻news\
 ## 开发检查
 
 ```bash
+# 1) 安装依赖，并把本项目以"可编辑模式"装进环境
+#    不装的话 `pytest` 会报 ModuleNotFoundError: No module named 'news_crawler'
+#    （裸 pytest 不会把仓库根目录加入 sys.path，只有 python -m pytest 才会）
 .venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m pip install -e . --no-deps
+
+# 2) 静态检查与测试
 .venv\Scripts\ruff check .
-.venv\Scripts\pytest
+.venv\Scripts\pytest -v
 .venv\Scripts\python tools\qa_pdf.py output\2026-08\2026-08-10.pdf
 ```
 
-`requirements.lock.txt` 记录当前已验证环境的精确版本；GitHub Actions 会在每次推送和 Pull Request 时自动运行静态检查与测试。
+`requirements.lock.txt` 记录当前已验证环境的精确版本；GitHub Actions（`.github/workflows/ci.yml`）在每次推送和 Pull Request 时执行同样的步骤：安装依赖 → 以 `-e .` 安装本项目 → `ruff check .` → `pytest -v`。
 
 ## 常见问题
 

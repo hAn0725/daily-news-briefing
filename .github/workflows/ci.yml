@@ -14,17 +14,28 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            pyproject.toml
       - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Install project (editable)
+        # 关键：把 news_crawler 装进环境。裸 `pytest` 不会把仓库根目录加入
+        # sys.path（只有 `python -m pytest` 才会），所以必须先安装本项目，
+        # 否则 collection 阶段就会 ModuleNotFoundError。
+        # 依赖统一由 requirements.txt 提供，这里用 --no-deps 避免两处漂移。
+        run: python -m pip install -e . --no-deps
+      - name: Smoke test import
+        run: python -c "import news_crawler, news_crawler.main; print('news_crawler import OK')"
       - name: Lint
         run: ruff check .
       - name: Test
-        run: pytest
+        run: pytest -v
