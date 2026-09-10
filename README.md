@@ -12,8 +12,10 @@
 - 🧠 **个性化**：按你的画像（光电专业 + 股民）加权筛选，聚焦半导体/AI/新能源/军工等持仓板块
 - 🛡️ **AI 完整性保护**：DeepSeek 任一批次失败时不生成、不发送，避免混入本地降级摘要
 - 🧯 **去重安全阀**：只合并不同来源对同一具体事件的报道；拒绝大组、跨类别、重叠分组，并限制单次删除比例，避免 AI 误删整批新闻
-- 🗂️ 按月归档，自动清理 N 天前的旧报告
-- 📬 **可靠定时 + 邮件**：每天 07:00 自动运行，睡眠/关机错过后自动补跑；隐藏启动器同步等待并把真实退出码返回计划任务，启动、结束和异常都有独立日志
+- 🗂️ 按月归档，自动清理 N 天前的旧报告与旧日志（每日日志默认保留 90 天）
+- 📬 **可靠定时 + 邮件**：每天 07:00 自动运行；隐藏启动器同步等待并把真实退出码返回计划任务，启动、结束和异常都有独立日志
+- 🔁 **三重入口兜底**：定时 07:00 → 登录补跑（开机登录后自动触发）→ 手动双击。当天已发送成功时后两者 1 秒内跳过，**不会重复发邮件、不会重复花 AI 费用**
+- 🚨 **看门狗告警**：每天 20:30 检查当天日报是否已发送，未发送则自动诊断原因（启动器报错 / VPN 没通 / 邮件发送失败 …）并发邮件提醒，失败不再沉默
 - 💰 **用量透明**：报告页脚显示 DeepSeek token 用量与估算费用
 
 ## 快速开始
@@ -41,6 +43,9 @@ python tools/store_key.py
 - `user_profile`：你的背景、关注领域、排除词（决定 AI 筛选倾向）
 - `report.categories`：各分类条数、保留天数
 - `report.max_items_per_source_in_category`：每个分类优先采用同一来源的条数上限，候选不足时自动回填
+- `report.keep_log_days`：每日日志（`report_*.log`）保留天数，默认 90
+- `report.lock_enabled` / `report.lock_stale_minutes`：生成互斥锁，防止手动运行与定时任务同时生成（双份邮件 + 双份 AI 费用）
+- `schedule.watchdog_start`：看门狗检查时间（默认 20:30），此时间后当天仍未发送就发告警邮件
 - `ai.dedup_max_group_size` / `dedup_max_drop_ratio`：AI 去重单组及总删除比例上限
 - `sources`：新闻源列表（可自由增删）
 
@@ -56,6 +61,7 @@ python -m news_crawler.main --no-ai              # 强制本地处理（不调�
 python -m news_crawler.main --no-mail            # 只保存报告，不发邮件
 python -m news_crawler.main --resend-mail        # PDF 未变化时也强制重发
 python -m news_crawler.main --wait-net           # 先检测 VPN/外网再生成（计划任务模式）
+python -m news_crawler.main --watchdog           # 看门狗：检查今天是否已发送，未发送则发告警邮件
 ```
 
 报告输出到 `output/2026-08/2026-08-10.pdf` 及同名 HTML。QQ 邮件同时附带 PDF 和 HTML。日志在 `logs/`。

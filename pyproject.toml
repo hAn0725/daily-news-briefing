@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --basetemp=tmp/pytest"
-cache_dir = "tmp/pytest-cache"
+addopts = "-q --basetemp=tmp/pytest-work"
+cache_dir = "tmp/pytest-cache-work"
 
 [tool.ruff]
 target-version = "py312"
