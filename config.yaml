@@ -64,8 +64,16 @@ network:
   # 留空 = 直连（此时国外源可能无法访问）。
   proxy: "http://127.0.0.1:7892"
   # VPN 预检：配置了 proxy 时只走该代理，绝不回退到国内可直连站点。
+  check_timeout: 12
+  # 探针列表：任一成功即视为联网（代码按顺序逐个尝试）。
+  # 2026-09-10 事故：VPN 节点对 Google 系域名随机超时（同一域名时通时断），
+  # 单一探针导致整天被误判"未联网"而不生成，故加备用探针兜底；
+  # 即使个别探针被规则分流直连而误放行，后面还有 require_foreign_news
+  # 第二道闸（海外源数量/条数不达标照样不发）。
   check_urls:
     - "https://www.google.com/generate_204"
+    - "https://www.gstatic.com/generate_204"
+    - "https://cp.cloudflare.com/generate_204"
   check_statuses: [204]
   # 抓取后的第二道闸门；不达标时不生成、不发邮件，定时入口 5 分钟后重试。
   require_foreign_news: true
