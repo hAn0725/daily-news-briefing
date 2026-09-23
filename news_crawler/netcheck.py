@@ -8,8 +8,11 @@
   * 一旦"已联网 + 空闲时段"即返回 True，主流程开始生成（生成后不再检测）。
 """
 import logging
+import socket
+import sys
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import requests
@@ -76,6 +79,74 @@ def check_online(config, quiet=False):
                 if attempt < tries_per_url and backoff > 0:
                     time.sleep(backoff)
     return False
+
+
+def _proxy_listening(proxy, timeout=2.0):
+    """检查配置的本地代理端口是否在监听。
+
+    返回 True/False；无法解析端口时返回 None（不做判断）。
+    用于区分“代理软件没开/端口改了”与“代理通但外网不通”两种失败。
+    """
+    try:
+        parts = urlparse(proxy)
+        host = parts.hostname or "127.0.0.1"
+        port = parts.port
+    except (ValueError, TypeError):
+        return None
+    if not port:
+        return None
+    try:
+        with socket.create_connection((host, port), timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _windows_system_proxy():
+    """读取 Windows 系统代理（WinINet），用于提示配置端口是否过期。"""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            if not enabled:
+                return ""
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except OSError:
+        return ""
+    server = str(server or "").strip()
+    # "http=...;https=..." 形式的分组列表暂不解析，只处理单个 host:port。
+    if not server or "=" in server:
+        return ""
+    return server if "://" in server else f"http://{server}"
+
+
+def net_failure_hint(config):
+    """联网失败时给出一行人话诊断，附在“未检测到外网连接”日志后面。
+
+    看门狗告警邮件会引用这行日志，因此端口配置错误等问题能直接在告警里看出。
+    """
+    net = config.network or {}
+    proxy = (net.get("proxy") or "").strip()
+    if not proxy:
+        return ""
+    listening = _proxy_listening(proxy)
+    if listening is False:
+        hint = (
+            f"；本地代理 {proxy} 端口未监听"
+            "（代理软件未启动，或端口已改但 config.yaml 的 network.proxy 未同步）"
+        )
+        sys_proxy = _windows_system_proxy()
+        if sys_proxy and sys_proxy.rstrip("/") != proxy.rstrip("/"):
+            hint += f"，当前系统代理为 {sys_proxy}，请对照修改 config.yaml"
+        return hint
+    if listening is True:
+        return "（代理端口可达，可能是 VPN 节点无法访问探针）"
+    return ""
 
 
 def foreign_coverage(config, sources, items):
@@ -163,8 +234,8 @@ def wait_until_ready(config, log):
             return True
         else:
             wait_s = min(interval_min * 60, remain)
-            log.info("未检测到外网连接（请确认 VPN 已开启），"
+            log.info("未检测到外网连接（请确认 VPN 已开启）%s，"
                      "%d 分钟后重试（今日 %02d:%02d 截止）",
-                     interval_min, dh, dm)
+                     net_failure_hint(config), interval_min, dh, dm)
 
         time.sleep(max(wait_s, 1))
