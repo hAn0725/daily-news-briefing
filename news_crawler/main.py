@@ -32,7 +32,11 @@ from news_crawler.filter import filter_items  # noqa: E402
 from news_crawler.fulltext import fetch_full_text  # noqa: E402
 from news_crawler.mail import send_report_email  # noqa: E402
 from news_crawler.market import fetch_market_data  # noqa: E402
-from news_crawler.netcheck import foreign_coverage, wait_until_ready  # noqa: E402
+from news_crawler.netcheck import (  # noqa: E402
+    foreign_coverage,
+    resolve_proxy,
+    wait_until_ready,
+)
 from news_crawler.report import generate_report  # noqa: E402
 
 
@@ -152,6 +156,10 @@ def run(args):
         return 0
 
     # ---------- 0. 计划任务模式：等待 VPN/外网 ----------
+    # 自动寻找可用的本地代理端口（配置端口失效时切换到系统代理/常见端口），
+    # 必须在联网检测与抓取（Fetcher 会缓存 proxy_dict）之前执行。
+    resolve_proxy(config, log)
+
     # 未联网每 5 分钟重试，直到生成或当天截止；生成后不再检测。
     if args.wait_net and not wait_until_ready(config, log):
         # 截止仍不联网：尽力发一封失败通知（同一天只发一次），再退出。

@@ -113,6 +113,93 @@ def test_foreign_coverage_blocks_domestic_only_report():
     assert foreign_coverage(config, sources, items) == (False, 0, 0)
 
 
+def test_resolve_proxy_switches_to_working_candidate(monkeypatch):
+    """配置端口未监听时，应自动切换到第一个“监听+探针通过”的候选。"""
+    from news_crawler import netcheck
+
+    def listening(proxy, timeout=2.0):
+        # 配置的 7892 挂了，7897（系统代理）开着
+        return "7892" not in proxy
+
+    probed = []
+    monkeypatch.setattr(netcheck, "_proxy_listening", listening)
+    monkeypatch.setattr(netcheck, "_windows_system_proxy",
+                        lambda: "http://127.0.0.1:7897")
+
+    def probe(config, proxy, timeout=None):
+        probed.append(proxy)
+        return proxy.endswith(":7897")
+
+    monkeypatch.setattr(netcheck, "_probe_proxy", probe)
+    config = _config({
+        "proxy": "http://127.0.0.1:7892",
+        "check_urls": ["https://www.google.com/generate_204"],
+    })
+
+    assert netcheck.resolve_proxy(config) == "http://127.0.0.1:7897"
+    # 进程内生效：后续抓取/检测都用新端口
+    assert config.network["proxy"] == "http://127.0.0.1:7897"
+    # 7892 端口没开，不应浪费探针；7897 通过后立即停止
+    assert probed == ["http://127.0.0.1:7897"]
+
+
+def test_resolve_proxy_keeps_config_when_all_candidates_fail(monkeypatch):
+    """全都不可用时保持原配置（交给 netcheck 重试并诊断），不乱改。"""
+    from news_crawler import netcheck
+
+    monkeypatch.setattr(netcheck, "_proxy_listening",
+                        lambda proxy, timeout=2.0: True)
+    monkeypatch.setattr(netcheck, "_windows_system_proxy", lambda: "")
+    monkeypatch.setattr(netcheck, "_probe_proxy",
+                        lambda config, proxy, timeout=None: False)
+    config = _config({"proxy": "http://127.0.0.1:7892",
+                      "check_urls": ["https://www.google.com/generate_204"]})
+
+    assert netcheck.resolve_proxy(config) == "http://127.0.0.1:7892"
+    assert config.network["proxy"] == "http://127.0.0.1:7892"
+
+
+def test_resolve_proxy_disabled_and_direct_mode(monkeypatch):
+    """auto_detect_proxy=false 只试配置值；未配置 proxy（直连）不干预。"""
+    from news_crawler import netcheck
+
+    calls = []
+    monkeypatch.setattr(netcheck, "_proxy_listening",
+                        lambda proxy, timeout=2.0: calls.append(proxy) or False)
+    monkeypatch.setattr(netcheck, "_windows_system_proxy",
+                        lambda: "http://127.0.0.1:7897")
+
+    off = _config({"proxy": "http://127.0.0.1:7892",
+                   "auto_detect_proxy": False})
+    assert netcheck.resolve_proxy(off) == "http://127.0.0.1:7892"
+    # 关闭自动检测：只检查配置的端口，不碰系统代理/常见端口
+    assert calls == ["http://127.0.0.1:7892"]
+    assert off.network["proxy"] == "http://127.0.0.1:7892"
+
+    calls.clear()
+    direct = _config({"proxy": ""})
+    assert netcheck.resolve_proxy(direct) == ""
+    assert calls == []  # 直连/TUN 模式完全不探测
+
+
+def test_candidate_proxies_dedup_and_order(monkeypatch):
+    from news_crawler import netcheck
+
+    monkeypatch.setattr(netcheck, "_windows_system_proxy",
+                        lambda: "http://127.0.0.1:7897")
+    config = _config({
+        "proxy": "http://127.0.0.1:7897",  # 配置与系统代理相同 → 去重
+        "proxy_candidates": ["http://127.0.0.1:10809"],
+    })
+    candidates = netcheck._candidate_proxies(config)
+
+    assert candidates[0] == "http://127.0.0.1:7897"
+    assert candidates.count("http://127.0.0.1:7897") == 1
+    assert "http://127.0.0.1:10809" in candidates
+    # 常见端口候选都跟随配置的 host（127.0.0.1）
+    assert "http://127.0.0.1:7890" in candidates
+
+
 def test_foreign_coverage_accepts_required_sources_and_items():
     sources = [
         Source(name="海外一", category="world", type="rss",

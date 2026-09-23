@@ -38,7 +38,9 @@ python tools/store_key.py
 ```
 
 编辑 `config.yaml` 可调整：
-- `network.proxy`：你的梯子本地代理地址（默认 `http://127.0.0.1:7892`，请改成实际端口；配置后检测失败不会再回退直连）
+- `network.proxy`：你的梯子本地代理地址（默认 `http://127.0.0.1:7897`，作为首选端口）
+- `network.auto_detect_proxy`：配置的端口不通时自动寻找可用端口（依次尝试 Windows 系统代理、`proxy_candidates`、常见代理端口 7897/7892/7890/10809 等，先查监听再用联网探针验证，找到即自动切换，本次运行内生效）
+- `network.proxy_candidates`：额外优先尝试的代理地址列表（可留空）
 - `network.min_foreign_sources` / `min_foreign_items`：允许生成和发送日报所需的最低海外来源数与条数
 - `user_profile`：你的背景、关注领域、排除词（决定 AI 筛选倾向）
 - `report.categories`：各分类条数、保留天数
@@ -150,7 +152,7 @@ d:\新闻news\
 ## 常见问题
 
 - **当天一直没收到日报？** 三步自查：① 收到看门狗告警邮件了吗（每天 20:30 检查）？里面写明了最可能的原因；② 没收到告警也没收到日报 → 多半电脑一直睡眠，开机后三个入口（定时、登录补跑、看门狗）都会自动补上；③ 着急的话直接双击桌面「每日新闻」手动生成。历史某天的报告错过了可用 `python tools/resend.py --date YYYY-MM-DD` 补发（不重复消耗 AI；补发成功会自动写入发送记录，看门狗不会再发误报）。
-- **国外新闻抓不到？** 确认梯子已开启，且 `config.yaml` 里 `network.proxy` 是实际端口（一般 7890/7892/10809）。联网检测配置了多个探针地址（google/gstatic/cloudflare）且每个地址自动重试，个别探针抖动不再影响判定；若节点对 Google 系整体不稳，建议换个节点。计划任务会等待，不会发送只有国内源的日报。
+- **国外新闻抓不到？** 确认梯子已开启。`config.yaml` 里的 `network.proxy` 只是首选端口，**端口不通时程序会自动检测**（系统代理 → `proxy_candidates` → 常见端口 7890/7892/7897/10809，监听+探针双重验证后自动切换），代理软件换端口也能自愈。联网检测配置了多个探针地址（google/gstatic/cloudflare）且每个地址自动重试，个别探针抖动不再影响判定；若节点对 Google 系整体不稳，建议换个节点。计划任务会等待，不会发送只有国内源的日报。
 - **某个源失效了？** 在 `config.yaml` 的 `sources` 里删除或替换即可，单个源失败不影响整体。
 - **想换 AI 服务商？** `ai.py` 兼容 OpenAI 接口格式，改 `config.yaml` 的 `base_url`、`model` 和 `api_key_env` 即可。
 - **报告想更简洁/更详细？** 调整 `config.yaml` 的 `report.categories.*.max_items`（条数）或 `user_profile.item_summary_chars`（单条摘要字数）。

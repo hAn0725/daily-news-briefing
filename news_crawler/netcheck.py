@@ -149,6 +149,82 @@ def net_failure_hint(config):
     return ""
 
 
+# 自动检测时代查的常见本地代理端口（clash/v2rayN/Shadowsocks 等默认端口）。
+DEFAULT_PROXY_PORTS = (7897, 7892, 7890, 7891, 10809, 10808, 1080,
+                       8080, 8888, 33210)
+
+
+def _candidate_proxies(config):
+    """按优先级列出候选代理：配置值 → 系统代理 → 常见本地端口（去重）。"""
+    net = config.network or {}
+    configured = (net.get("proxy") or "").strip()
+    candidates = []
+
+    def add(value):
+        value = (value or "").strip().rstrip("/")
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(configured)
+    if not net.get("auto_detect_proxy", True):
+        return candidates
+
+    add(_windows_system_proxy())
+    for extra in net.get("proxy_candidates") or []:
+        add(str(extra))
+    host = "127.0.0.1"
+    if configured:
+        try:
+            host = urlparse(configured).hostname or host
+        except (ValueError, TypeError):
+            pass
+    for port in DEFAULT_PROXY_PORTS:
+        add(f"http://{host}:{port}")
+    return candidates
+
+
+def _probe_proxy(config, proxy, timeout=None):
+    """用第一个联网探针验证某个代理是否真的可用（须已通过端口监听检查）。"""
+    net = config.network or {}
+    urls = net.get("check_urls") or DEFAULT_CHECK_URLS
+    expected = {int(s) for s in (net.get("check_statuses") or [204])}
+    if timeout is None:
+        timeout = float(net.get("check_timeout", 6))
+    try:
+        r = requests.get(urls[0], proxies={"http": proxy, "https": proxy},
+                         timeout=timeout, headers=_UA)
+        return r.status_code in expected
+    except requests.RequestException:
+        return False
+
+
+def resolve_proxy(config, logger=None):
+    """自动寻找可用的本地代理端口（进程内生效，不改写 config.yaml）。
+
+    配置的端口失效（代理软件改端口/没开）时，依次尝试系统代理和常见
+    本地端口：先查端口是否监听，再用联网探针验证，第一个通过的写回
+    ``config.network["proxy"]``，后续抓取（Fetcher/fulltext）自动沿用。
+    没有任何候选可用时保持原配置不变（由 netcheck 继续重试并给出诊断）。
+    未配置 proxy（直连/TUN 模式）时不干预。
+    返回最终生效的代理地址（空串表示直连）。
+    """
+    log = logger or logging.getLogger("news")
+    net = config.network or {}
+    configured = (net.get("proxy") or "").strip()
+    if not configured:
+        return ""
+    for proxy in _candidate_proxies(config):
+        if _proxy_listening(proxy) is False:
+            continue  # 端口都没开，不用浪费一次探针超时
+        if _probe_proxy(config, proxy):
+            if proxy != configured:
+                log.info("代理端口自动检测：%s 不可用，已切换到 %s",
+                         configured, proxy)
+                net["proxy"] = proxy
+            return proxy
+    return configured
+
+
 def foreign_coverage(config, sources, items):
     """返回海外新闻覆盖是否达到发送日报的最低要求及统计值。"""
     net = config.network or {}
@@ -229,10 +305,12 @@ def wait_until_ready(config, log):
             wait_s = min(interval_min * 60, until_peak_end, remain)
             log.info("当前处于配置的禁用时段，暂不生成；%.0f 分钟后再次检查",
                      wait_s / 60)
-        elif check_online(config):
-            log.info("联网检测通过（VPN/外网可用），开始生成。")
-            return True
         else:
+            # 每轮重试前先自动找可用端口：VPN 可能中途才开/中途才换端口。
+            resolve_proxy(config, log)
+            if check_online(config):
+                log.info("联网检测通过（VPN/外网可用），开始生成。")
+                return True
             wait_s = min(interval_min * 60, remain)
             log.info("未检测到外网连接（请确认 VPN 已开启）%s，"
                      "%d 分钟后重试（今日 %02d:%02d 截止）",
